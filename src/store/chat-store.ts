@@ -5,6 +5,8 @@ import { persist } from "zustand/middleware";
 import type { Personality } from "@/lib/personalities";
 import { DEFAULT_MODEL } from "@/lib/nvidia";
 
+// ─── Types ───────────────────────────────────────────────
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
@@ -13,28 +15,59 @@ export interface Message {
   personalityName?: string;
   personalityColor?: string;
   timestamp: number;
+  dbId?: string; // Supabase message UUID
+}
+
+export interface Conversation {
+  id: string;
+  type: "chat" | "roundtable";
+  title: string | null;
+  personalityIds: string[];
+  model: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 type AppMode = "landing" | "chat" | "roundtable";
 
 interface ChatState {
+  // Mode
   mode: AppMode;
+
+  // Current session
+  sessionId: string;
+
+  // Conversation persistence
+  currentConversationId: string | null;
+  conversations: Conversation[];
+
+  // Current chat state
   activePersonality: Personality | null;
   roundtableMembers: Personality[];
   roundtableSelected: Set<string>;
   messages: Message[];
   isLoading: boolean;
   streamingPersonalityId: string | null;
+  streamingMessageDbId: string | null;
   selectedModel: string;
 
+  // Actions
   setMode: (mode: AppMode) => void;
+  initSession: () => string;
   startChat: (personality: Personality) => void;
   startRoundtable: (members: Personality[]) => void;
+  loadConversation: (conversationId: string) => Promise<void>;
+  deleteConversation: (conversationId: string) => Promise<void>;
+  fetchConversations: () => Promise<void>;
+
   addMessage: (message: Message) => void;
   updateMessage: (id: string, content: string) => void;
   appendToMessage: (id: string, content: string) => void;
   setLoading: (loading: boolean) => void;
   setStreamingPersonality: (id: string | null) => void;
+  setStreamingMessageDbId: (id: string | null) => void;
+
   toggleRoundtableSelection: (personalityId: string) => void;
   clearSelection: () => void;
   clearChat: () => void;
@@ -42,50 +75,323 @@ interface ChatState {
   setSelectedModel: (model: string) => void;
 }
 
+function getSessionId(): string {
+  if (typeof window === "undefined") return "";
+  let sid = localStorage.getItem("mind-roundtable-session");
+  if (!sid) {
+    sid = crypto.randomUUID();
+    localStorage.setItem("mind-roundtable-session", sid);
+  }
+  return sid;
+}
+
+// ─── DB helpers ──────────────────────────────────────────
+
+async function apiCreateConversation(params: {
+  session_id: string;
+  type: "chat" | "roundtable";
+  personality_ids: string[];
+  model: string;
+  title?: string;
+}): Promise<Conversation> {
+  const res = await fetch("/api/conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error("Failed to create conversation");
+  const { conversation } = await res.json();
+  return conversation as Conversation;
+}
+
+async function apiFetchConversations(sessionId: string): Promise<Conversation[]> {
+  const res = await fetch(`/api/conversations?session_id=${encodeURIComponent(sessionId)}`);
+  if (!res.ok) return [];
+  const { conversations } = await res.json();
+  return (conversations || []) as Conversation[];
+}
+
+async function apiLoadConversation(id: string): Promise<{
+  conversation: Conversation;
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    personality_id?: string;
+    personality_name?: string;
+    personality_color?: string;
+    created_at: string;
+  }>;
+}> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error("Failed to load conversation");
+  return res.json();
+}
+
+async function apiDeleteConversation(id: string): Promise<void> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete conversation");
+}
+
+async function apiSaveMessage(
+  conversationId: string,
+  msg: {
+    role: "user" | "assistant";
+    content: string;
+    personality_id?: string;
+    personality_name?: string;
+    personality_color?: string;
+  }
+): Promise<string> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(msg),
+  });
+  if (!res.ok) throw new Error("Failed to save message");
+  const { message } = await res.json();
+  return message.id as string;
+}
+
+async function apiUpdateMessageContent(
+  messageId: string,
+  content: string
+): Promise<void> {
+  const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) throw new Error("Failed to update message");
+}
+
+// ─── Store ───────────────────────────────────────────────
+
 export const useChatStore = create<ChatState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       mode: "landing",
+      sessionId: "",
+      currentConversationId: null,
+      conversations: [],
       activePersonality: null,
       roundtableMembers: [],
       roundtableSelected: new Set<string>(),
       messages: [],
       isLoading: false,
       streamingPersonalityId: null,
+      streamingMessageDbId: null,
       selectedModel: DEFAULT_MODEL,
 
       setMode: (mode) => set({ mode }),
-      startChat: (personality) =>
+
+      initSession: () => {
+        const sid = getSessionId();
+        set({ sessionId: sid });
+        // Fetch conversations in background
+        get().fetchConversations();
+        return sid;
+      },
+
+      startChat: (personality) => {
+        const state = get();
+        const sid = state.sessionId || getSessionId();
         set({
+          sessionId: sid,
           mode: "chat",
           activePersonality: personality,
           messages: [],
           isLoading: false,
-        }),
-      startRoundtable: (members) =>
+          currentConversationId: null,
+          streamingMessageDbId: null,
+        });
+
+        // Create conversation in DB
+        apiCreateConversation({
+          session_id: sid,
+          type: "chat",
+          personality_ids: [personality.id],
+          model: state.selectedModel,
+        })
+          .then((conv) => {
+            set({ currentConversationId: conv.id });
+            get().fetchConversations();
+          })
+          .catch((err) => console.error("[startChat] create conversation failed:", err));
+      },
+
+      startRoundtable: (members) => {
+        const state = get();
+        const sid = state.sessionId || getSessionId();
         set({
+          sessionId: sid,
           mode: "roundtable",
           roundtableMembers: members,
           messages: [],
           isLoading: false,
           roundtableSelected: new Set<string>(),
-        }),
-      addMessage: (message) =>
-        set((state) => ({ messages: [...state.messages, message] })),
-      updateMessage: (id, content) =>
+          currentConversationId: null,
+          streamingMessageDbId: null,
+        });
+
+        apiCreateConversation({
+          session_id: sid,
+          type: "roundtable",
+          personality_ids: members.map((m) => m.id),
+          model: state.selectedModel,
+        })
+          .then((conv) => {
+            set({ currentConversationId: conv.id });
+            get().fetchConversations();
+          })
+          .catch((err) => console.error("[startRoundtable] create conv failed:", err));
+      },
+
+      loadConversation: async (conversationId: string) => {
+        try {
+          const { conversation, messages: dbMessages } = await apiLoadConversation(conversationId);
+          const { personalities } = await import("@/lib/personalities");
+
+          // Map DB messages to local Message format
+          const localMessages: Message[] = dbMessages.map((m) => ({
+            id: crypto.randomUUID(),
+            role: m.role,
+            content: m.content,
+            personalityId: m.personality_id || undefined,
+            personalityName: m.personality_name || undefined,
+            personalityColor: m.personality_color || undefined,
+            timestamp: new Date(m.created_at).getTime(),
+            dbId: m.id,
+          }));
+
+          if (conversation.type === "chat") {
+            const personalityId = conversation.personalityIds[0];
+            const personality = personalities.find((p) => p.id === personalityId) || null;
+            set({
+              mode: "chat",
+              activePersonality: personality,
+              messages: localMessages,
+              currentConversationId: conversation.id,
+              selectedModel: conversation.model,
+              isLoading: false,
+            });
+          } else {
+            const members = conversation.personalityIds
+              .map((pid) => personalities.find((p) => p.id === pid))
+              .filter(Boolean) as Personality[];
+            set({
+              mode: "roundtable",
+              roundtableMembers: members,
+              messages: localMessages,
+              currentConversationId: conversation.id,
+              selectedModel: conversation.model,
+              isLoading: false,
+              roundtableSelected: new Set<string>(),
+            });
+          }
+        } catch (err) {
+          console.error("[loadConversation]", err);
+        }
+      },
+
+      deleteConversation: async (conversationId: string) => {
+        try {
+          await apiDeleteConversation(conversationId);
+          const state = get();
+          const updated = state.conversations.filter((c) => c.id !== conversationId);
+          set({ conversations: updated });
+          // If deleting current conversation, go home
+          if (state.currentConversationId === conversationId) {
+            get().goHome();
+          }
+        } catch (err) {
+          console.error("[deleteConversation]", err);
+        }
+      },
+
+      fetchConversations: async () => {
+        const state = get();
+        if (!state.sessionId) return;
+        try {
+          const convs = await apiFetchConversations(state.sessionId);
+          set({ conversations: convs });
+        } catch (err) {
+          console.error("[fetchConversations]", err);
+        }
+      },
+
+      addMessage: (message) => {
+        set((state) => ({ messages: [...state.messages, message] }));
+
+        // Save to DB
+        const state = get();
+        const convId = state.currentConversationId;
+        if (convId && message.content) {
+          apiSaveMessage(convId, {
+            role: message.role,
+            content: message.content,
+            personality_id: message.personalityId,
+            personality_name: message.personalityName,
+            personality_color: message.personalityColor,
+          })
+            .then((dbId) => {
+              // Attach dbId to the message in store
+              set((s) => ({
+                messages: s.messages.map((m) =>
+                  m.id === message.id ? { ...m, dbId } : m
+                ),
+              }));
+              if (message.role === "assistant") {
+                set({ streamingMessageDbId: dbId });
+              }
+              // Refresh conversation list
+              get().fetchConversations();
+            })
+            .catch((err) => console.error("[addMessage] save failed:", err));
+        }
+      },
+
+      updateMessage: (id, content) => {
         set((state) => ({
-          messages: state.messages.map((m) =>
-            m.id === id ? { ...m, content } : m
-          ),
-        })),
-      appendToMessage: (id, content) =>
+          messages: state.messages.map((m) => (m.id === id ? { ...m, content } : m)),
+        }));
+
+        // Update in DB
+        const state = get();
+        const msg = state.messages.find((m) => m.id === id);
+        if (msg?.dbId) {
+          apiUpdateMessageContent(msg.dbId, content).catch((err) =>
+            console.error("[updateMessage] DB update failed:", err)
+          );
+        }
+      },
+
+      appendToMessage: (id, content) => {
         set((state) => ({
           messages: state.messages.map((m) =>
             m.id === id ? { ...m, content: m.content + content } : m
           ),
-        })),
+        }));
+
+        // Debounced DB update via streamingMessageDbId
+        const state = get();
+        const msg = state.messages.find((m) => m.id === id);
+        const dbId = msg?.dbId || state.streamingMessageDbId;
+        if (dbId) {
+          const fullContent = msg?.content || "";
+          // Use requestIdleCallback or setTimeout to avoid too many updates
+          if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+            (window as unknown as { requestIdleCallback: (fn: () => void) => void }).requestIdleCallback(() => {
+              apiUpdateMessageContent(dbId, fullContent).catch(() => {});
+            });
+          }
+        }
+      },
+
       setLoading: (loading) => set({ isLoading: loading }),
       setStreamingPersonality: (id) => set({ streamingPersonalityId: id }),
+      setStreamingMessageDbId: (id) => set({ streamingMessageDbId: id }),
+
       toggleRoundtableSelection: (personalityId) =>
         set((state) => {
           const next = new Set(state.roundtableSelected);
@@ -96,13 +402,17 @@ export const useChatStore = create<ChatState>()(
           }
           return { roundtableSelected: next };
         }),
+
       clearSelection: () => set({ roundtableSelected: new Set<string>() }),
+
       clearChat: () =>
         set({
           messages: [],
           isLoading: false,
           streamingPersonalityId: null,
+          streamingMessageDbId: null,
         }),
+
       goHome: () =>
         set({
           mode: "landing",
@@ -112,12 +422,18 @@ export const useChatStore = create<ChatState>()(
           messages: [],
           isLoading: false,
           streamingPersonalityId: null,
+          streamingMessageDbId: null,
+          currentConversationId: null,
         }),
+
       setSelectedModel: (model) => set({ selectedModel: model }),
     }),
     {
       name: "mind-roundtable-prefs",
-      partialize: (state) => ({ selectedModel: state.selectedModel }),
+      partialize: (state) => ({
+        selectedModel: state.selectedModel,
+        sessionId: state.sessionId,
+      }),
     }
   )
 );
