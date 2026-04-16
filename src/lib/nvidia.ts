@@ -27,56 +27,8 @@ export const PROVIDERS: ProviderInfo[] = [
 
 // ─── Models ──────────────────────────────────────────────
 
-export const GROQ_MODELS: LLMModel[] = [
-  {
-    id: "llama-3.1-70b-versatile",
-    provider: "groq",
-    name: "Llama 3.1 70B",
-    description: "Meta 旗舰，综合能力最强，速度极快",
-    contextLength: "128K",
-    speed: "fast",
-  },
-  {
-    id: "llama-3.1-8b-instant",
-    provider: "groq",
-    name: "Llama 3.1 8B Instant",
-    description: "极致速度，适合简单对话",
-    contextLength: "128K",
-    speed: "fast",
-  },
-  {
-    id: "llama3-70b-8192",
-    provider: "groq",
-    name: "Llama 3 70B",
-    description: "经典 Llama 3，稳定可靠",
-    contextLength: "8K",
-    speed: "fast",
-  },
-  {
-    id: "llama3-8b-8192",
-    provider: "groq",
-    name: "Llama 3 8B",
-    description: "最快响应，轻量场景首选",
-    contextLength: "8K",
-    speed: "fast",
-  },
-  {
-    id: "mixtral-8x7b-32768",
-    provider: "groq",
-    name: "Mixtral 8x7B",
-    description: "Mistral MoE，多语言支持好",
-    contextLength: "32K",
-    speed: "fast",
-  },
-  {
-    id: "gemma2-9b-it",
-    provider: "groq",
-    name: "Gemma 2 9B",
-    description: "Google 轻量模型，速度快",
-    contextLength: "8K",
-    speed: "fast",
-  },
-];
+// Groq models (available when GROQ_API_KEY is properly configured)
+export const GROQ_MODELS: LLMModel[] = [];
 
 export const NVIDIA_MODELS: LLMModel[] = [
   {
@@ -131,8 +83,8 @@ export const NVIDIA_MODELS: LLMModel[] = [
 
 export const ALL_MODELS = [...GROQ_MODELS, ...NVIDIA_MODELS];
 
-// Default: Groq Llama 3.1 70B for speed
-export const DEFAULT_MODEL = `${GROQ_MODELS[0].provider}:${GROQ_MODELS[0].id}`;
+// Default: NVIDIA Llama 3.1 70B
+export const DEFAULT_MODEL = `${NVIDIA_MODELS[1].provider}:${NVIDIA_MODELS[1].id}`;
 
 // ─── Helpers ─────────────────────────────────────────────
 
