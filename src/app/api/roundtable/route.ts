@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getPersonalitiesByIds } from "@/lib/personalities";
-import { createNVIDIAStream, createNVIDIACompletion, DEFAULT_MODEL } from "@/lib/nvidia";
+import { createStream, createCompletion, DEFAULT_MODEL } from "@/lib/nvidia";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,7 @@ async function* streamPersonalityResponse(
   roundtableInstruction: string,
   history: RoundtableMessage[],
   userMessage: string,
-  model: string
+  modelKey: string
 ): AsyncGenerator<string> {
   const trimmedHistory = history.slice(-MAX_HISTORY_MESSAGES);
 
@@ -44,7 +44,7 @@ async function* streamPersonalityResponse(
   ];
 
   try {
-    const upstreamStream = await createNVIDIAStream(messages, model);
+    const upstreamStream = await createStream(messages, modelKey);
     const decoder = new TextDecoder();
     const reader = upstreamStream.getReader();
     let buffer = "";
@@ -100,7 +100,7 @@ async function* streamPersonalityResponse(
     }
   } catch {
     // Fallback to non-streaming
-    const text = await createNVIDIACompletion(messages, model);
+    const text = await createCompletion(messages, modelKey);
     yield text;
   }
 }

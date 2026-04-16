@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getPersonality } from "@/lib/personalities";
-import { createNVIDIAStream, createNVIDIACompletion, DEFAULT_MODEL } from "@/lib/nvidia";
+import { createStream, createCompletion, DEFAULT_MODEL } from "@/lib/nvidia";
 
 export const runtime = "nodejs";
 
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
     // Try streaming first
     try {
-      const upstreamStream = await createNVIDIAStream(messages, selectedModel);
+      const upstreamStream = await createStream(messages, selectedModel);
 
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
       });
     } catch {
       // Fallback to non-streaming
-      const text = await createNVIDIACompletion(messages, selectedModel);
+      const text = await createCompletion(messages, selectedModel);
       const encoder = new TextEncoder();
       const fallbackStream = new ReadableStream({
         start(controller) {

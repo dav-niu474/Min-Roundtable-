@@ -1,155 +1,275 @@
-export interface NVIDIAModel {
+// ─── Types ───────────────────────────────────────────────
+
+export type LLMProvider = "nvidia" | "groq";
+
+export interface LLMModel {
   id: string;
+  provider: LLMProvider;
   name: string;
   description: string;
   contextLength: string;
+  speed: "fast" | "medium" | "slow"; // visual hint
 }
 
-export const NVIDIA_MODELS: NVIDIAModel[] = [
+export interface ProviderInfo {
+  id: LLMProvider;
+  name: string;
+  icon: string;
+  description: string;
+}
+
+// ─── Providers ───────────────────────────────────────────
+
+export const PROVIDERS: ProviderInfo[] = [
+  { id: "groq", name: "Groq", icon: "⚡", description: "超低延迟推理" },
+  { id: "nvidia", name: "NVIDIA", icon: "🟢", description: "高质量生成" },
+];
+
+// ─── Models ──────────────────────────────────────────────
+
+export const GROQ_MODELS: LLMModel[] = [
   {
-    id: "meta/llama-3.1-405b-instruct",
-    name: "Llama 3.1 405B",
-    description: "Meta 最大最强开源模型，综合能力顶级",
-    contextLength: "128K",
-  },
-  {
-    id: "meta/llama-3.1-70b-instruct",
+    id: "llama-3.1-70b-versatile",
+    provider: "groq",
     name: "Llama 3.1 70B",
-    description: "Meta 平衡型模型，速度与质量兼备",
+    description: "Meta 旗舰，综合能力最强，速度极快",
     contextLength: "128K",
+    speed: "fast",
   },
   {
-    id: "nvidia/llama-3.1-nemotron-70b-instruct",
-    name: "Nemotron 70B",
-    description: "NVIDIA 微调 Llama，中文能力优秀",
+    id: "llama-3.1-8b-instant",
+    provider: "groq",
+    name: "Llama 3.1 8B Instant",
+    description: "极致速度，适合简单对话",
     contextLength: "128K",
+    speed: "fast",
   },
   {
-    id: "mistralai/mixtral-8x22b-instruct-v0.1",
-    name: "Mixtral 8x22B",
-    description: "Mistral MoE 架构，高效推理",
-    contextLength: "64K",
+    id: "llama3-70b-8192",
+    provider: "groq",
+    name: "Llama 3 70B",
+    description: "经典 Llama 3，稳定可靠",
+    contextLength: "8K",
+    speed: "fast",
   },
   {
-    id: "google/gemma-2-27b-it",
-    name: "Gemma 2 27B",
+    id: "llama3-8b-8192",
+    provider: "groq",
+    name: "Llama 3 8B",
+    description: "最快响应，轻量场景首选",
+    contextLength: "8K",
+    speed: "fast",
+  },
+  {
+    id: "mixtral-8x7b-32768",
+    provider: "groq",
+    name: "Mixtral 8x7B",
+    description: "Mistral MoE，多语言支持好",
+    contextLength: "32K",
+    speed: "fast",
+  },
+  {
+    id: "gemma2-9b-it",
+    provider: "groq",
+    name: "Gemma 2 9B",
     description: "Google 轻量模型，速度快",
     contextLength: "8K",
-  },
-  {
-    id: "microsoft/phi-3-mini-128k-instruct",
-    name: "Phi-3 Mini",
-    description: "Microsoft 小型模型，128K 长上下文",
-    contextLength: "128K",
-  },
-  {
-    id: "nvidia/nemotron-4-340b-instruct",
-    name: "Nemotron 4 340B",
-    description: "NVIDIA 自研大模型，指令遵循优秀",
-    contextLength: "4K",
-  },
-  {
-    id: "deepseek-ai/deepseek-r1",
-    name: "DeepSeek R1",
-    description: "深度求索推理模型，逻辑推理极强",
-    contextLength: "128K",
+    speed: "fast",
   },
 ];
 
-export const DEFAULT_MODEL = NVIDIA_MODELS[0].id;
+export const NVIDIA_MODELS: LLMModel[] = [
+  {
+    id: "meta/llama-3.1-405b-instruct",
+    provider: "nvidia",
+    name: "Llama 3.1 405B",
+    description: "Meta 最大最强开源模型",
+    contextLength: "128K",
+    speed: "slow",
+  },
+  {
+    id: "meta/llama-3.1-70b-instruct",
+    provider: "nvidia",
+    name: "Llama 3.1 70B",
+    description: "平衡型，速度与质量兼备",
+    contextLength: "128K",
+    speed: "medium",
+  },
+  {
+    id: "nvidia/llama-3.1-nemotron-70b-instruct",
+    provider: "nvidia",
+    name: "Nemotron 70B",
+    description: "NVIDIA 微调版，中文优秀",
+    contextLength: "128K",
+    speed: "medium",
+  },
+  {
+    id: "deepseek-ai/deepseek-r1",
+    provider: "nvidia",
+    name: "DeepSeek R1",
+    description: "推理模型，逻辑极强",
+    contextLength: "128K",
+    speed: "medium",
+  },
+  {
+    id: "mistralai/mixtral-8x22b-instruct-v0.1",
+    provider: "nvidia",
+    name: "Mixtral 8x22B",
+    description: "Mistral MoE，高效推理",
+    contextLength: "64K",
+    speed: "medium",
+  },
+  {
+    id: "google/gemma-2-27b-it",
+    provider: "nvidia",
+    name: "Gemma 2 27B",
+    description: "Google 轻量模型",
+    contextLength: "8K",
+    speed: "medium",
+  },
+];
 
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+export const ALL_MODELS = [...GROQ_MODELS, ...NVIDIA_MODELS];
+
+// Default: Groq Llama 3.1 70B for speed
+export const DEFAULT_MODEL = `${GROQ_MODELS[0].provider}:${GROQ_MODELS[0].id}`;
+
+// ─── Helpers ─────────────────────────────────────────────
+
+/** Parse "provider:modelId" → { provider, modelId } */
+export function parseModelKey(key: string): { provider: LLMProvider; modelId: string } {
+  const idx = key.indexOf(":");
+  if (idx === -1) {
+    // Legacy: no provider prefix, assume nvidia
+    return { provider: "nvidia", modelId: key };
+  }
+  return {
+    provider: key.slice(0, idx) as LLMProvider,
+    modelId: key.slice(idx + 1),
+  };
+}
+
+/** Build "provider:modelId" */
+export function buildModelKey(provider: LLMProvider, modelId: string): string {
+  return `${provider}:${modelId}`;
+}
+
+/** Find model object by key */
+export function findModel(key: string): LLMModel | undefined {
+  const { provider, modelId } = parseModelKey(key);
+  return ALL_MODELS.find((m) => m.provider === provider && m.id === modelId);
+}
+
+// ─── API Callers (OpenAI-compatible) ─────────────────────
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
 
+function getBaseUrl(provider: LLMProvider): string {
+  switch (provider) {
+    case "groq":
+      return "https://api.groq.com/openai/v1";
+    case "nvidia":
+      return "https://integrate.api.nvidia.com/v1";
+  }
+}
+
+function getApiKey(provider: LLMProvider): string {
+  switch (provider) {
+    case "groq":
+      return process.env.GROQ_API_KEY || "";
+    case "nvidia":
+      return process.env.NVIDIA_API_KEY || "";
+  }
+}
+
 /**
- * Call NVIDIA NIM API (OpenAI-compatible) with streaming.
- * Returns a ReadableStream of SSE chunks.
+ * Call an OpenAI-compatible API with streaming.
+ * Returns the raw ReadableStream of SSE chunks.
  */
-export async function createNVIDIAStream(
+export async function createStream(
   messages: ChatMessage[],
-  model: string = DEFAULT_MODEL,
-  apiKey?: string
+  modelKey: string
 ): Promise<ReadableStream<Uint8Array>> {
-  const key = apiKey || process.env.NVIDIA_API_KEY;
-  if (!key) {
-    throw new Error("NVIDIA_API_KEY is not configured");
+  const { provider, modelId } = parseModelKey(modelKey);
+  const apiKey = getApiKey(provider);
+  if (!apiKey) {
+    throw new Error(`${provider.toUpperCase()}_API_KEY is not configured`);
   }
 
-  const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+  const baseUrl = getBaseUrl(provider);
+
+  const body: Record<string, unknown> = {
+    model: modelId,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    stream: true,
+    temperature: 0.7,
+    top_p: 0.9,
+    max_tokens: 2048,
+  };
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
-      stream: true,
-      max_tokens: 2048,
-      temperature: 0.7,
-      top_p: 0.9,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("[NVIDIA API Error]", response.status, errorText);
+    console.error(`[${provider.toUpperCase()} API Error]`, response.status, errorText);
     throw new Error(
-      `NVIDIA API error ${response.status}: ${errorText.slice(0, 200)}`
+      `${provider.toUpperCase()} API error ${response.status}: ${errorText.slice(0, 200)}`
     );
   }
 
   if (!response.body) {
-    throw new Error("NVIDIA API returned empty body");
+    throw new Error(`${provider.toUpperCase()} API returned empty body`);
   }
 
   return response.body;
 }
 
 /**
- * Call NVIDIA NIM API without streaming (fallback).
+ * Call API without streaming (fallback).
  */
-export async function createNVIDIACompletion(
+export async function createCompletion(
   messages: ChatMessage[],
-  model: string = DEFAULT_MODEL,
-  apiKey?: string
+  modelKey: string
 ): Promise<string> {
-  const key = apiKey || process.env.NVIDIA_API_KEY;
-  if (!key) {
-    throw new Error("NVIDIA_API_KEY is not configured");
+  const { provider, modelId } = parseModelKey(modelKey);
+  const apiKey = getApiKey(provider);
+  if (!apiKey) {
+    throw new Error(`${provider.toUpperCase()}_API_KEY is not configured`);
   }
 
-  const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+  const baseUrl = getBaseUrl(provider);
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
+      model: modelId,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: false,
-      max_tokens: 2048,
       temperature: 0.7,
       top_p: 0.9,
+      max_tokens: 2048,
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("[NVIDIA API Error]", response.status, errorText);
+    console.error(`[${provider.toUpperCase()} API Error]`, response.status, errorText);
     throw new Error(
-      `NVIDIA API error ${response.status}: ${errorText.slice(0, 200)}`
+      `${provider.toUpperCase()} API error ${response.status}: ${errorText.slice(0, 200)}`
     );
   }
 

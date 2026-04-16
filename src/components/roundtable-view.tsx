@@ -4,8 +4,8 @@ import { useChatStore } from "@/store/chat-store";
 import ChatMessage from "./chat-message";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Send, Loader2, Users, X, UserPlus, Cpu, History, Trash2 } from "lucide-react";
-import { NVIDIA_MODELS } from "@/lib/nvidia";
+import { ArrowLeft, Send, Loader2, Users, X, UserPlus, History, Trash2 } from "lucide-react";
+import ModelSelector from "./model-selector";
 import Image from "next/image";
 import { useRef, useEffect, useState, useCallback } from "react";
 import { personalities } from "@/lib/personalities";
@@ -212,19 +212,11 @@ export default function RoundtableView() {
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
-          <div className="hidden sm:flex items-center gap-1.5 rounded-lg border border-border/50 bg-background/50 px-2 py-1 ml-auto">
-            <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="h-7 border-0 bg-transparent text-xs text-muted-foreground focus:outline-none focus:ring-0"
-              disabled={isLoading}
-            >
-              {NVIDIA_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
+          <ModelSelector
+            value={selectedModel}
+            onChange={setSelectedModel}
+            disabled={isLoading}
+          />
           <Users className="h-5 w-5 text-muted-foreground flex-shrink-0" />
           <div className="min-w-0">
             <h2 className="truncate text-sm font-bold">圆桌讨论</h2>
