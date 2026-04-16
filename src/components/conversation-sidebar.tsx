@@ -4,10 +4,16 @@ import { useChatStore, type Conversation } from "@/store/chat-store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+import {
   MessageCircle,
   Users,
   Trash2,
-  X,
   History,
   Plus,
 } from "lucide-react";
@@ -17,12 +23,15 @@ import Image from "next/image";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
 
-interface ConversationSidebarProps {
+interface ConversationHistorySheetProps {
   open: boolean;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
-export default function ConversationSidebar({ open, onClose }: ConversationSidebarProps) {
+export default function ConversationHistorySheet({
+  open,
+  onOpenChange,
+}: ConversationHistorySheetProps) {
   const {
     conversations,
     currentConversationId,
@@ -33,17 +42,19 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
 
   const formatDate = (dateStr: string) => {
     try {
-      return formatDistanceToNow(new Date(dateStr), { addSuffix: true, locale: zhCN });
+      return formatDistanceToNow(new Date(dateStr), {
+        addSuffix: true,
+        locale: zhCN,
+      });
     } catch {
       return "";
     }
   };
 
   const getPersonalityInfo = (ids: string[]) => {
-    const found = ids
+    return ids
       .map((id) => personalities.find((p) => p.id === id))
       .filter(Boolean);
-    return found;
   };
 
   const handleDelete = async (e: React.MouseEvent, convId: string) => {
@@ -51,52 +62,43 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
     await deleteConversation(convId);
   };
 
-  return (
-    <>
-      {/* Overlay for mobile */}
-      {open && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
-          onClick={onClose}
-        />
-      )}
+  const handleLoadConversation = (convId: string) => {
+    loadConversation(convId);
+    onOpenChange(false);
+  };
 
-      {/* Sidebar */}
-      <div
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-80 flex-col border-r border-border/50 bg-card/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-0 lg:translate-x-0 lg:border-r lg:bg-card/50",
-          open ? "translate-x-0" : "-translate-x-full"
-        )}
+  const handleGoHome = () => {
+    goHome();
+    onOpenChange(false);
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="left"
+        className="w-full p-0 sm:max-w-[320px]"
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border/30 px-4 py-3">
+        <SheetHeader className="border-b border-border/30 px-4 py-3">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">对话历史</h2>
+            <SheetTitle className="text-sm">对话历史</SheetTitle>
           </div>
-          <div className="flex items-center gap-1">
+          <SheetDescription className="sr-only">
+            浏览和选择历史对话
+          </SheetDescription>
+          <div className="flex items-center gap-1 pt-1">
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => {
-                goHome();
-                onClose();
-              }}
+              onClick={handleGoHome}
               className="h-8 w-8"
               title="新对话"
             >
               <Plus className="h-4 w-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onClose}
-              className="h-8 w-8 lg:hidden"
-            >
-              <X className="h-4 w-4" />
-            </Button>
           </div>
-        </div>
+        </SheetHeader>
 
         {/* Conversation List */}
         <ScrollArea className="flex-1">
@@ -121,10 +123,7 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
                   return (
                     <button
                       key={conv.id}
-                      onClick={() => {
-                        loadConversation(conv.id);
-                        onClose();
-                      }}
+                      onClick={() => handleLoadConversation(conv.id)}
                       className={cn(
                         "group relative w-full rounded-lg px-3 py-3 text-left transition-all hover:bg-accent/50",
                         isActive && "bg-accent"
@@ -134,27 +133,28 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
                         {/* Icon */}
                         <div className="mt-0.5 flex-shrink-0">
                           {isRoundtable ? (
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                          ) : (
-                            infos[0] && (
-                              <div className="h-5 w-5 overflow-hidden rounded-full border border-border/50">
-                                <Image
-                                  src={infos[0].avatar}
-                                  alt={infos[0].name}
-                                  width={20}
-                                  height={20}
-                                  className="h-full w-full object-cover"
-                                />
-                              </div>
-                            )
-                          )}
+                            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-muted">
+                              <Users className="h-3 w-3 text-muted-foreground" />
+                            </div>
+                          ) : infos[0] ? (
+                            <div className="h-5 w-5 overflow-hidden rounded-full border border-border/50">
+                              <Image
+                                src={infos[0].avatar}
+                                alt={infos[0].name}
+                                width={20}
+                                height={20}
+                                className="h-full w-full object-cover"
+                              />
+                            </div>
+                          ) : null}
                         </div>
 
                         {/* Content */}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <h3 className="truncate text-sm font-medium">
-                              {conv.title || (isRoundtable ? "圆桌讨论" : "新对话")}
+                              {conv.title ||
+                                (isRoundtable ? "圆桌讨论" : "新对话")}
                             </h3>
                             {isRoundtable && (
                               <span className="flex-shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
@@ -172,6 +172,9 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
                             <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
                               {formatDate(conv.updatedAt)}
                             </span>
+                          </div>
+                          <div className="mt-1 text-[10px] text-muted-foreground/50">
+                            {conv.messageCount} 条消息
                           </div>
                         </div>
 
@@ -191,7 +194,7 @@ export default function ConversationSidebar({ open, onClose }: ConversationSideb
             )}
           </div>
         </ScrollArea>
-      </div>
-    </>
+      </SheetContent>
+    </Sheet>
   );
 }

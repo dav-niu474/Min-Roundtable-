@@ -41,6 +41,7 @@ interface ChatState {
   // Conversation persistence
   currentConversationId: string | null;
   conversations: Conversation[];
+  _pendingConvId: Promise<string | null> | null;
 
   // Current chat state
   activePersonality: Personality | null;
@@ -165,6 +166,9 @@ async function apiUpdateMessageContent(
   if (!res.ok) throw new Error("Failed to update message");
 }
 
+// Debounce timers for streaming DB updates
+const _streamTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
 // ─── Store ───────────────────────────────────────────────
 
 export const useChatStore = create<ChatState>()(
@@ -174,6 +178,7 @@ export const useChatStore = create<ChatState>()(
       sessionId: "",
       currentConversationId: null,
       conversations: [],
+      _pendingConvId: null,
       activePersonality: null,
       roundtableMembers: [],
       roundtableSelected: new Set<string>(),
@@ -188,7 +193,6 @@ export const useChatStore = create<ChatState>()(
       initSession: () => {
         const sid = getSessionId();
         set({ sessionId: sid });
-        // Fetch conversations in background
         get().fetchConversations();
         return sid;
       },
@@ -196,6 +200,15 @@ export const useChatStore = create<ChatState>()(
       startChat: (personality) => {
         const state = get();
         const sid = state.sessionId || getSessionId();
+
+        // Create conversation promise FIRST to avoid race conditions
+        const convPromise = apiCreateConversation({
+          session_id: sid,
+          type: "chat",
+          personality_ids: [personality.id],
+          model: state.selectedModel,
+        });
+
         set({
           sessionId: sid,
           mode: "chat",
@@ -204,25 +217,31 @@ export const useChatStore = create<ChatState>()(
           isLoading: false,
           currentConversationId: null,
           streamingMessageDbId: null,
+          _pendingConvId: convPromise
+            .then((c) => {
+              set({ currentConversationId: c.id, _pendingConvId: null });
+              get().fetchConversations();
+              return c.id;
+            })
+            .catch((err) => {
+              console.error("[startChat] create conversation failed:", err);
+              set({ _pendingConvId: null });
+              return null;
+            }),
         });
-
-        // Create conversation in DB
-        apiCreateConversation({
-          session_id: sid,
-          type: "chat",
-          personality_ids: [personality.id],
-          model: state.selectedModel,
-        })
-          .then((conv) => {
-            set({ currentConversationId: conv.id });
-            get().fetchConversations();
-          })
-          .catch((err) => console.error("[startChat] create conversation failed:", err));
       },
 
       startRoundtable: (members) => {
         const state = get();
         const sid = state.sessionId || getSessionId();
+
+        const convPromise = apiCreateConversation({
+          session_id: sid,
+          type: "roundtable",
+          personality_ids: members.map((m) => m.id),
+          model: state.selectedModel,
+        });
+
         set({
           sessionId: sid,
           mode: "roundtable",
@@ -232,19 +251,18 @@ export const useChatStore = create<ChatState>()(
           roundtableSelected: new Set<string>(),
           currentConversationId: null,
           streamingMessageDbId: null,
+          _pendingConvId: convPromise
+            .then((c) => {
+              set({ currentConversationId: c.id, _pendingConvId: null });
+              get().fetchConversations();
+              return c.id;
+            })
+            .catch((err) => {
+              console.error("[startRoundtable] create conv failed:", err);
+              set({ _pendingConvId: null });
+              return null;
+            }),
         });
-
-        apiCreateConversation({
-          session_id: sid,
-          type: "roundtable",
-          personality_ids: members.map((m) => m.id),
-          model: state.selectedModel,
-        })
-          .then((conv) => {
-            set({ currentConversationId: conv.id });
-            get().fetchConversations();
-          })
-          .catch((err) => console.error("[startRoundtable] create conv failed:", err));
       },
 
       loadConversation: async (conversationId: string) => {
@@ -252,7 +270,6 @@ export const useChatStore = create<ChatState>()(
           const { conversation, messages: dbMessages } = await apiLoadConversation(conversationId);
           const { personalities } = await import("@/lib/personalities");
 
-          // Map DB messages to local Message format
           const localMessages: Message[] = dbMessages.map((m) => ({
             id: crypto.randomUUID(),
             role: m.role,
@@ -274,6 +291,7 @@ export const useChatStore = create<ChatState>()(
               currentConversationId: conversation.id,
               selectedModel: conversation.model,
               isLoading: false,
+              _pendingConvId: null,
             });
           } else {
             const members = conversation.personalityIds
@@ -287,6 +305,7 @@ export const useChatStore = create<ChatState>()(
               selectedModel: conversation.model,
               isLoading: false,
               roundtableSelected: new Set<string>(),
+              _pendingConvId: null,
             });
           }
         } catch (err) {
@@ -300,7 +319,6 @@ export const useChatStore = create<ChatState>()(
           const state = get();
           const updated = state.conversations.filter((c) => c.id !== conversationId);
           set({ conversations: updated });
-          // If deleting current conversation, go home
           if (state.currentConversationId === conversationId) {
             get().goHome();
           }
@@ -323,11 +341,13 @@ export const useChatStore = create<ChatState>()(
       addMessage: (message) => {
         set((state) => ({ messages: [...state.messages, message] }));
 
-        // Save to DB
+        // Save to DB — wait for conversation ID if needed
         const state = get();
         const convId = state.currentConversationId;
-        if (convId && message.content) {
-          apiSaveMessage(convId, {
+
+        const doSave = (cid: string) => {
+          if (!cid || !message.content) return;
+          apiSaveMessage(cid, {
             role: message.role,
             content: message.content,
             personality_id: message.personalityId,
@@ -335,7 +355,6 @@ export const useChatStore = create<ChatState>()(
             personality_color: message.personalityColor,
           })
             .then((dbId) => {
-              // Attach dbId to the message in store
               set((s) => ({
                 messages: s.messages.map((m) =>
                   m.id === message.id ? { ...m, dbId } : m
@@ -344,10 +363,15 @@ export const useChatStore = create<ChatState>()(
               if (message.role === "assistant") {
                 set({ streamingMessageDbId: dbId });
               }
-              // Refresh conversation list
               get().fetchConversations();
             })
             .catch((err) => console.error("[addMessage] save failed:", err));
+        };
+
+        if (convId) {
+          doSave(convId);
+        } else if (state._pendingConvId) {
+          state._pendingConvId.then((id) => id && doSave(id));
         }
       },
 
@@ -356,7 +380,6 @@ export const useChatStore = create<ChatState>()(
           messages: state.messages.map((m) => (m.id === id ? { ...m, content } : m)),
         }));
 
-        // Update in DB
         const state = get();
         const msg = state.messages.find((m) => m.id === id);
         if (msg?.dbId) {
@@ -373,18 +396,16 @@ export const useChatStore = create<ChatState>()(
           ),
         }));
 
-        // Debounced DB update via streamingMessageDbId
+        // Debounced DB update
         const state = get();
         const msg = state.messages.find((m) => m.id === id);
         const dbId = msg?.dbId || state.streamingMessageDbId;
-        if (dbId) {
-          const fullContent = msg?.content || "";
-          // Use requestIdleCallback or setTimeout to avoid too many updates
-          if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-            (window as unknown as { requestIdleCallback: (fn: () => void) => void }).requestIdleCallback(() => {
-              apiUpdateMessageContent(dbId, fullContent).catch(() => {});
-            });
-          }
+        if (dbId && msg?.content) {
+          if (_streamTimers[dbId]) clearTimeout(_streamTimers[dbId]);
+          _streamTimers[dbId] = setTimeout(() => {
+            apiUpdateMessageContent(dbId, msg.content).catch(() => {});
+            delete _streamTimers[dbId];
+          }, 500);
         }
       },
 
@@ -424,6 +445,7 @@ export const useChatStore = create<ChatState>()(
           streamingPersonalityId: null,
           streamingMessageDbId: null,
           currentConversationId: null,
+          _pendingConvId: null,
         }),
 
       setSelectedModel: (model) => set({ selectedModel: model }),
