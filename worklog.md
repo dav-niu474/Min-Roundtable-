@@ -98,3 +98,25 @@ Stage Summary:
 - All components compile without errors
 - Streaming format compatibility verified
 - Application ready for preview
+
+---
+Task ID: 7
+Agent: Main
+Task: Switch from z-ai-web-dev-sdk to NVIDIA NIM API, add model selection, push to GitHub
+
+Work Log:
+- Created src/lib/nvidia.ts with NVIDIA NIM API client (OpenAI-compatible)
+- Added 8 NVIDIA models: Llama 3.1 405B/70B, Nemotron 70B/340B, Mixtral 8x22B, Gemma 2 27B, Phi-3 Mini, DeepSeek R1
+- Rewrote /api/chat/route.ts to use NVIDIA API with streaming
+- Rewrote /api/roundtable/route.ts to use NVIDIA API with streaming
+- Added model selector dropdown in chat-view and roundtable-view headers
+- Updated Zustand store with model selection and localStorage persistence
+- Configured next.config.ts for Vercel (unoptimized images)
+- Pushed to GitHub: https://github.com/dav-niu474/Min-Roundtable-.git
+- Vercel deployment blocked by SAML SSO enforcement on user's team
+
+Stage Summary:
+- NVIDIA API integration complete with 8 model options
+- Code pushed to GitHub successfully
+- Vercel deployment requires manual SAML authentication via dashboard
+- User needs to: go to vercel.com/new → import repo → set NVIDIA_API_KEY → deploy
