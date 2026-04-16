@@ -109,9 +109,11 @@ export async function POST() {
       );
     }
 
+    // Supabase on Vercel uses self-signed certs; override TLS globally for this connection
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
     const client = new pg.Client({
       connectionString,
-      ssl: { rejectUnauthorized: false },
     });
 
     await client.connect();
@@ -167,9 +169,10 @@ export async function GET() {
       );
     }
 
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
     const client = new pg.Client({
       connectionString,
-      ssl: { rejectUnauthorized: false },
     });
 
     await client.connect();
