@@ -192,3 +192,32 @@ Stage Summary:
 - Includes: UUID primary keys, JSONB personality_ids, TIMESTAMPTZ, auto-update triggers, message_count trigger, RLS policies, 4 indexes
 - Database persistence is now fully operational end-to-end
 - Production deployment auto-triggered after cleanup push
+
+---
+Task ID: 4
+Agent: Main Agent
+Task: Redesign UI and fix model service issues
+
+Work Log:
+- Redesigned conversation history UI:
+  - Removed full-width sidebar from landing page (was ugly, squished content)
+  - Replaced sidebar with shadcn Sheet (slide-in drawer) in chat/roundtable views
+  - Added "recent conversations" section at bottom of landing page (max 5 items, horizontal scroll on mobile)
+  - Landing page now clean full-width layout with no sidebar
+- Fixed message persistence bugs in chat-store.ts:
+  - Fixed race condition: conversation creation now stores pending promise (_pendingConvId)
+  - Messages wait for conversation ID before saving to DB
+  - Empty assistant placeholder messages no longer saved to DB
+  - Streaming DB updates use 500ms setTimeout debounce (replaced unreliable requestIdleCallback)
+- Diagnosed model service issue:
+  - Groq llama-3.1-70b-versatile decommissioned by Groq
+  - GROQ_API_KEY on Vercel is encrypted/unreadable (decryption key issue with Vercel)
+  - Removed all Groq models, set NVIDIA Llama 3.1 70B as default
+  - Verified NVIDIA API working: HTTP 200 with streaming response on Vercel deployment
+- Deployed to Vercel, restored SSO protection
+
+Stage Summary:
+- UI completely redesigned: no more ugly sidebar, clean Sheet-based history access
+- Message persistence race conditions fixed
+- Model service working with NVIDIA (Groq disabled due to API key issue)
+- All code pushed to GitHub and deployed to Vercel
