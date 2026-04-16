@@ -145,3 +145,29 @@ Stage Summary:
 - GitHub: https://github.com/dav-niu474/Min-Roundtable-
 - SAML SSO solution: Create new Token AFTER SAML association, or use Dashboard GitHub import
 - Vercel project ID: prj_i02VEKIfEMi9Shuv78577WtLYiBr
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Integrate Supabase database for conversation persistence
+
+Work Log:
+- Installed @supabase/supabase-js v2
+- Created src/lib/supabase.ts with client/server instances, Vercel-prefixed env var support
+- Created supabase-schema.sql with conversations + messages tables, triggers, RLS
+- Created 4 API routes: conversations (GET/POST), conversations/[id] (GET/PATCH/DELETE), conversations/[id]/messages (POST), messages/[id] (PATCH)
+- Rewrote chat-store.ts with full persistence: sessionId, conversationId, conversations list, auto-save on addMessage, streaming update via requestIdleCallback
+- Created conversation-sidebar.tsx: mobile-responsive sidebar with history list, delete, personality avatars
+- Updated landing.tsx: added sidebar toggle, conversation count badge, init session
+- Updated chat-view.tsx: added history button, clear chat button, sidebar
+- Updated roundtable-view.tsx: same sidebar/history integration
+- Fixed tsconfig.json to exclude skills/ directory
+- Build verified locally (zero errors)
+- Pushed and deployed to Vercel — READY
+
+Stage Summary:
+- All conversations auto-saved to Supabase on creation and message send
+- Streaming messages update DB via requestIdleCallback debouncing
+- Conversation titles auto-generated from first user message
+- Session-based isolation via localStorage UUID
+- Vercel auto-detected Supabase env vars with minRoundtable_ prefix
