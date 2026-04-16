@@ -2,7 +2,7 @@
 
 import { ALL_MODELS, PROVIDERS, findModel, buildModelKey, type LLMProvider } from "@/lib/nvidia";
 import { cn } from "@/lib/utils";
-import { Cpu, Zap, ChevronDown } from "lucide-react";
+import { Cpu, Zap, ChevronDown, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 interface ModelSelectorProps {
@@ -13,9 +13,29 @@ interface ModelSelectorProps {
 
 export default function ModelSelector({ value, onChange, disabled }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<Record<string, boolean>>({});
   const containerRef = useRef<HTMLDivElement>(null);
 
   const currentModel = findModel(value);
+
+  // Fetch provider availability on mount
+  useEffect(() => {
+    fetch("/api/models")
+      .then((res) => res.json())
+      .then((data) => {
+        const status: Record<string, boolean> = {};
+        if (data?.providers) {
+          for (const [key, val] of Object.entries(data.providers)) {
+            status[key] = (val as { available: boolean }).available;
+          }
+        }
+        setProviderStatus(status);
+      })
+      .catch(() => {
+        // If fetch fails, assume all available (fallback)
+        setProviderStatus({ groq: true, nvidia: true });
+      });
+  }, []);
 
   // Close on outside click
   useEffect(() => {
@@ -27,6 +47,14 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
     if (open) document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
+
+  // Filter to only show providers that have models and are available
+  const availableProviders = PROVIDERS.filter((provider) => {
+    const models = ALL_MODELS.filter((m) => m.provider === provider.id);
+    if (models.length === 0) return false;
+    // Always show provider, but mark as unavailable if no API key
+    return true;
+  });
 
   return (
     <div ref={containerRef} className="relative">
@@ -47,6 +75,9 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
             <span className="max-w-[140px] truncate font-medium text-foreground">
               {currentModel.name}
             </span>
+            {providerStatus[currentModel.provider] === false && (
+              <AlertTriangle className="h-3 w-3 text-amber-500" />
+            )}
           </>
         ) : (
           <>
@@ -61,8 +92,10 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-xl border border-border/50 bg-popover shadow-xl animate-in fade-in-0 zoom-in-95 slide-in-from-top-2">
           <div className="max-h-[400px] overflow-y-auto p-1.5">
-            {PROVIDERS.map((provider) => {
+            {availableProviders.map((provider) => {
               const models = ALL_MODELS.filter((m) => m.provider === provider.id);
+              const isAvailable = providerStatus[provider.id] !== false;
+
               return (
                 <div key={provider.id}>
                   {/* Provider header */}
@@ -74,6 +107,13 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
                     <span className="text-[10px] text-muted-foreground">
                       {provider.description}
                     </span>
+                    {isAvailable ? (
+                      <CheckCircle2 className="ml-auto h-3 w-3 text-emerald-500" />
+                    ) : (
+                      <span title="未配置 API Key">
+                        <AlertTriangle className="ml-auto h-3 w-3 text-amber-500" />
+                      </span>
+                    )}
                   </div>
 
                   {/* Models */}
@@ -81,19 +121,26 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
                     {models.map((model) => {
                       const key = buildModelKey(model.provider, model.id);
                       const isSelected = value === key;
+                      const modelAvailable = providerStatus[model.provider] !== false;
                       return (
                         <button
                           key={key}
                           onClick={() => {
-                            onChange(key);
-                            setOpen(false);
+                            if (modelAvailable) {
+                              onChange(key);
+                              setOpen(false);
+                            }
                           }}
                           className={cn(
                             "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
                             isSelected
                               ? "bg-primary/10 text-primary"
-                              : "hover:bg-accent/50"
+                              : modelAvailable
+                                ? "hover:bg-accent/50"
+                                : "opacity-50 cursor-not-allowed"
                           )}
+                          disabled={!modelAvailable}
+                          title={!modelAvailable ? `${provider.name} 未配置 API Key，请设置 ${provider.id.toUpperCase()}_API_KEY 环境变量` : undefined}
                         >
                           <div className="mt-0.5 flex-shrink-0">
                             {model.speed === "fast" ? (
@@ -119,6 +166,11 @@ export default function ModelSelector({ value, onChange, disabled }: ModelSelect
                         </button>
                       );
                     })}
+                    {!isAvailable && (
+                      <p className="px-2.5 py-1.5 text-[10px] text-amber-600 dark:text-amber-400">
+                        ⚠ 请在环境变量中配置 {provider.id.toUpperCase()}_API_KEY
+                      </p>
+                    )}
                   </div>
                 </div>
               );

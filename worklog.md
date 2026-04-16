@@ -221,3 +221,34 @@ Stage Summary:
 - Message persistence race conditions fixed
 - Model service working with NVIDIA (Groq disabled due to API key issue)
 - All code pushed to GitHub and deployed to Vercel
+
+---
+Task ID: 5
+Agent: Main Agent
+Task: Fix Groq integration — add models and provider availability checking
+
+Work Log:
+- Root cause: GROQ_MODELS array was empty `[]` in src/lib/nvidia.ts — no Groq models were defined even though all infrastructure (base URL, API key handling, OpenAI-compatible calling) was in place
+- Added 6 Groq models to GROQ_MODELS:
+  1. llama-3.3-70b-versatile (Meta 最新通用模型)
+  2. llama-3.1-8b-instant (超低延迟)
+  3. llama-3.1-70b-versatile (平衡型)
+  4. mixtral-8x7b-32768 (Mistral MoE)
+  5. gemma2-9b-it (Google 轻量级)
+  6. deepseek-r1-distill-llama-70b (推理模型)
+- Created /api/models endpoint to report which providers have API keys configured
+- Updated model-selector.tsx to fetch provider status and show:
+  - ✅ Green checkmark for configured providers
+  - ⚠️ Amber warning for unconfigured providers
+  - Disabled (grayed out) model options for unconfigured providers
+  - Helpful error message: "请在环境变量中配置 GROQ_API_KEY"
+- Updated .env.example with GROQ_API_KEY template
+- Fixed TypeScript build error (Lucide icon title prop)
+- Verified build succeeds with zero errors
+
+Stage Summary:
+- Groq can now be used by simply setting GROQ_API_KEY env var
+- API key format: gsk_xxxxx (get from https://console.groq.com/keys)
+- 6 Groq models + 6 NVIDIA models = 12 total model options
+- Model selector shows provider availability status with visual indicators
+- Build verified: all 10 routes compile successfully
