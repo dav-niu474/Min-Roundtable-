@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Personality } from "@/lib/personalities";
 import { DEFAULT_MODEL } from "@/lib/nvidia";
+import type { DiscussionModeId } from "@/lib/discussion-modes";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -35,6 +36,10 @@ interface ChatState {
   // Mode
   mode: AppMode;
 
+  // Discussion mode for roundtable
+  discussionMode: DiscussionModeId;
+  hotSeatId: string | null;
+
   // Current session
   sessionId: string;
 
@@ -57,7 +62,7 @@ interface ChatState {
   setMode: (mode: AppMode) => void;
   initSession: () => string;
   startChat: (personality: Personality) => void;
-  startRoundtable: (members: Personality[]) => void;
+  startRoundtable: (members: Personality[], mode?: DiscussionModeId, hotSeatId?: string) => void;
   loadConversation: (conversationId: string) => Promise<void>;
   deleteConversation: (conversationId: string) => Promise<void>;
   fetchConversations: () => Promise<void>;
@@ -74,6 +79,8 @@ interface ChatState {
   clearChat: () => void;
   goHome: () => void;
   setSelectedModel: (model: string) => void;
+  setDiscussionMode: (mode: DiscussionModeId) => void;
+  setHotSeatId: (id: string | null) => void;
 }
 
 function getSessionId(): string {
@@ -176,6 +183,8 @@ export const useChatStore = create<ChatState>()(
     (set, get) => ({
       mode: "landing",
       sessionId: "",
+      discussionMode: "chain" as DiscussionModeId,
+      hotSeatId: null,
       currentConversationId: null,
       conversations: [],
       _pendingConvId: null,
@@ -231,9 +240,10 @@ export const useChatStore = create<ChatState>()(
         });
       },
 
-      startRoundtable: (members) => {
+      startRoundtable: (members, mode, hotSeatId) => {
         const state = get();
         const sid = state.sessionId || getSessionId();
+        const selectedMode = mode || state.discussionMode || "chain";
 
         const convPromise = apiCreateConversation({
           session_id: sid,
@@ -245,6 +255,8 @@ export const useChatStore = create<ChatState>()(
         set({
           sessionId: sid,
           mode: "roundtable",
+          discussionMode: selectedMode,
+          hotSeatId: hotSeatId || (selectedMode === "hotseat" ? members[0]?.id || null : null),
           roundtableMembers: members,
           messages: [],
           isLoading: false,
@@ -449,6 +461,9 @@ export const useChatStore = create<ChatState>()(
         }),
 
       setSelectedModel: (model) => set({ selectedModel: model }),
+
+      setDiscussionMode: (mode) => set({ discussionMode: mode }),
+      setHotSeatId: (id) => set({ hotSeatId: id }),
     }),
     {
       name: "mind-roundtable-prefs",
