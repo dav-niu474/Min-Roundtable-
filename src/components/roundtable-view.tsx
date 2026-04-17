@@ -5,27 +5,17 @@ import ChatMessage from "./chat-message";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ArrowLeft, Send, Loader2, Users, X, UserPlus, History, Trash2,
-  MessageSquare, Brain, ChevronRight, Shield, Swords, Lightbulb, CircleDot,
+  ArrowLeft, Send, Loader2, Users, X, UserPlus, History,
+  MessageSquare, ChevronRight, Reply, CircleStop,
 } from "lucide-react";
 import ModelSelector from "./model-selector";
 import Image from "next/image";
 import { useRef, useEffect, useState, useCallback } from "react";
 import { personalities } from "@/lib/personalities";
-import { DISCUSSION_MODES, getAvailableModes } from "@/lib/discussion-modes";
-import type { DiscussionMode, DiscussionModeId } from "@/lib/discussion-modes";
 import type { Message } from "@/store/chat-store";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import ConversationHistorySheet from "./conversation-sidebar";
-
-const modeIcons: Record<string, React.ReactNode> = {
-  chain: <CircleDot className="h-4 w-4" />,
-  debate: <Swords className="h-4 w-4" />,
-  hotseat: <Brain className="h-4 w-4" />,
-  consult: <Lightbulb className="h-4 w-4" />,
-  reverse: <Shield className="h-4 w-4" />,
-};
 
 export default function RoundtableView() {
   const {
@@ -34,87 +24,80 @@ export default function RoundtableView() {
     isLoading,
     streamingPersonalityId,
     addMessage,
-    appendToMessage,
     setLoading,
     setStreamingPersonality,
     goHome,
     startRoundtable,
     selectedModel,
     setSelectedModel,
-    clearChat,
     setStreamingMessageDbId,
-    discussionMode,
-    hotSeatId,
-    setDiscussionMode,
-    setHotSeatId,
   } = useChatStore();
 
   const [input, setInput] = useState("");
   const [showMemberPanel, setShowMemberPanel] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [currentSpeakerName, setCurrentSpeakerName] = useState("");
-  const [progressText, setProgressText] = useState("");
-  const [roundLabel, setRoundLabel] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const availableModes = getAvailableModes(roundtableMembers.length);
-  const currentMode = DISCUSSION_MODES.find((m) => m.id === discussionMode) || DISCUSSION_MODES[0];
+  const streamingPerson = streamingPersonalityId
+    ? roundtableMembers.find(m => m.id === streamingPersonalityId)
+    : null;
 
-  const sendMessage = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+  // ─── 核心方法：让某个成员发言 ───
+  const speakAs = useCallback(async (personalityId: string, triggerMessage?: string) => {
+    if (isLoading) return;
 
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: input.trim(),
-      timestamp: Date.now(),
-    };
-    addMessage(userMessage);
-    setInput("");
+    const member = roundtableMembers.find(m => m.id === personalityId);
+    if (!member) return;
+
     setLoading(true);
-    setProgressText("正在启动讨论...");
-    setRoundLabel(null);
+    setStreamingPersonality(personalityId);
 
-    // Create placeholder messages for all members
-    const placeholderIds: Record<string, string> = {};
-    for (const member of roundtableMembers) {
-      const id = crypto.randomUUID();
-      placeholderIds[member.id] = id;
-      addMessage({
-        id,
-        role: "assistant",
-        content: "",
-        personalityId: member.id,
-        personalityName: member.name,
-        personalityColor: member.color,
-        timestamp: Date.now(),
-      });
-    }
+    // 创建占位消息
+    const msgId = crypto.randomUUID();
+    addMessage({
+      id: msgId,
+      role: "assistant",
+      content: "",
+      personalityId: member.id,
+      personalityName: member.name,
+      personalityColor: member.color,
+      timestamp: Date.now(),
+    });
 
     try {
-      const history = messages
-        .filter((m) => m.content)
-        .map((m) => ({ role: m.role, content: m.content, personalityId: m.personalityId }));
+      // 构建完整对话历史（当前store里的所有消息）
+      const currentMessages = useChatStore.getState().messages;
+      const history = currentMessages
+        .filter(m => m.content)
+        .map(m => ({
+          role: m.role,
+          content: m.content,
+          personalityId: m.personalityId,
+          personalityName: m.personalityName,
+        }));
+
+      // triggerMessage 是触发这次发言的那条消息（用户刚发的，或者某条被回复的消息）
+      const message = triggerMessage || (currentMessages.length > 0 ? currentMessages[currentMessages.length - 1].content : "");
 
       const res = await fetch("/api/roundtable", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          personalityIds: roundtableMembers.map((m) => m.id),
-          message: userMessage.content,
+          personalityId: member.id,
+          personalityIds: roundtableMembers.map(m => m.id),
+          message,
           history,
           model: selectedModel,
-          mode: discussionMode,
-          hotSeatId: hotSeatId,
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to fetch response");
+      if (!res.ok) throw new Error("Failed to fetch");
 
+      // 处理SSE流式响应
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
 
@@ -129,55 +112,75 @@ export default function RoundtableView() {
 
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed) continue;
+            if (!trimmed || !trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (payload === "[DONE]") continue;
             try {
-              const parsed = JSON.parse(trimmed);
-
-              if (parsed.type === "turn_start") {
-                setStreamingPersonality(parsed.personalityId);
-                setCurrentSpeakerName(parsed.personalityName);
-                const meta = parsed.meta;
-                if (meta?.round) {
-                  setRoundLabel(`${meta.round} · ${parsed.personalityName}`);
-                } else if (meta?.phase) {
-                  setRoundLabel(parsed.personalityName);
-                } else {
-                  setRoundLabel(parsed.personalityName);
-                }
-                setProgressText(`${parsed.personalityName} 正在发言...`);
-              } else if (parsed.type === "turn_end") {
-                setStreamingPersonality(null);
-              } else if (parsed.type === "round_start") {
-                setRoundLabel(parsed.roundName);
-                setProgressText(`${parsed.roundName} — ${parsed.roundDesc}`);
-              } else if (parsed.type === "round_end") {
-                setRoundLabel(null);
-              } else if (parsed.type === "phase_start") {
-                setRoundLabel(parsed.phaseName);
-                setProgressText(parsed.description);
-              } else if (parsed.type === "phase_end") {
-                setRoundLabel(null);
-              } else if (parsed.type === "done" || parsed.type === "error") {
-                continue;
-              } else if (parsed.personalityId && parsed.content) {
-                appendToMessage(placeholderIds[parsed.personalityId], parsed.content);
+              const parsed = JSON.parse(payload);
+              if (parsed.content) {
+                useChatStore.getState().appendToMessage(msgId, parsed.content);
               }
             } catch { /* skip */ }
           }
         }
       }
     } catch {
-      for (const [pid, msgId] of Object.entries(placeholderIds)) {
-        appendToMessage(msgId, "⚠️ 回复生成失败，请重试。");
-      }
+      useChatStore.getState().appendToMessage(msgId, "⚠️ 发言失败，请重试。");
     } finally {
       setLoading(false);
       setStreamingPersonality(null);
       setStreamingMessageDbId(null);
-      setProgressText("");
-      setRoundLabel(null);
     }
-  }, [input, isLoading, roundtableMembers, messages, addMessage, appendToMessage, setLoading, setStreamingPersonality, selectedModel, setStreamingMessageDbId, discussionMode, hotSeatId]);
+  }, [isLoading, roundtableMembers, selectedModel, addMessage, setLoading, setStreamingPersonality, setStreamingMessageDbId]);
+
+  // ─── 用户发消息：所有成员依次回应 ───
+  const sendMessage = useCallback(async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: input.trim(),
+      timestamp: Date.now(),
+    };
+    addMessage(userMsg);
+    const triggerText = input.trim();
+    setInput("");
+
+    // 依次让每个成员回应
+    for (const member of roundtableMembers) {
+      // 每次发言前重新读取最新消息历史
+      await speakAs(member.id, triggerText);
+    }
+  }, [input, isLoading, roundtableMembers, speakAs, addMessage]);
+
+  // ─── 点击让某人回应 ───
+  const handleReplyTo = async (personalityId: string, replyContent?: string) => {
+    if (isLoading) return;
+    await speakAs(personalityId, replyContent);
+  };
+
+  // ─── 下一个人发言（轮转） ───
+  const speakNext = useCallback(async () => {
+    if (isLoading || roundtableMembers.length === 0) return;
+
+    const currentMessages = useChatStore.getState().messages;
+    let lastSpeakerIndex = -1;
+
+    for (let i = currentMessages.length - 1; i >= 0; i--) {
+      const msg = currentMessages[i];
+      if (msg.role === "assistant" && msg.personalityId) {
+        const idx = roundtableMembers.findIndex(m => m.id === msg.personalityId);
+        if (idx !== -1) {
+          lastSpeakerIndex = idx;
+          break;
+        }
+      }
+    }
+
+    const nextIndex = (lastSpeakerIndex + 1) % roundtableMembers.length;
+    await speakAs(roundtableMembers[nextIndex].id);
+  }, [isLoading, roundtableMembers, speakAs]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -188,33 +191,15 @@ export default function RoundtableView() {
 
   const toggleMember = (personalityId: string) => {
     if (isLoading) return;
-    const updated = roundtableMembers.find((m) => m.id === personalityId)
-      ? roundtableMembers.filter((m) => m.id !== personalityId)
-      : [...roundtableMembers, personalities.find((p) => p.id === personalityId)!].filter(Boolean);
-    if (updated.length >= 2) startRoundtable(updated as typeof roundtableMembers, discussionMode, hotSeatId ?? undefined);
-  };
-
-  const handleModeSelect = (modeId: DiscussionModeId) => {
-    if (isLoading) return;
-    setDiscussionMode(modeId);
-    if (modeId === "hotseat" && !hotSeatId) {
-      setHotSeatId(roundtableMembers[0]?.id || null);
-    }
-  };
-
-  const handleStartRoundtable = () => {
-    startRoundtable(roundtableMembers, discussionMode, hotSeatId ?? undefined);
+    const updated = roundtableMembers.find(m => m.id === personalityId)
+      ? roundtableMembers.filter(m => m.id !== personalityId)
+      : [...roundtableMembers, personalities.find(p => p.id === personalityId)!].filter(Boolean);
+    if (updated.length >= 2) startRoundtable(updated);
   };
 
   const availableToAdd = personalities.filter(
-    (p) => !roundtableMembers.find((m) => m.id === p.id)
+    p => !roundtableMembers.find(m => m.id === p.id)
   );
-
-  // ─── Hot seat selector ───
-  const isHotSeatMode = discussionMode === "hotseat";
-  const hotSeatPerson = isHotSeatMode
-    ? roundtableMembers.find((m) => m.id === hotSeatId)
-    : null;
 
   return (
     <div className="flex h-screen flex-col">
@@ -229,13 +214,30 @@ export default function RoundtableView() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <ModelSelector value={selectedModel} onChange={setSelectedModel} disabled={isLoading} />
-        <div
-          className="flex items-center gap-1.5 flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold"
-          style={{ backgroundColor: `${currentMode.color}15`, color: currentMode.color }}
-        >
-          {modeIcons[currentMode.id]}
-          <span className="hidden sm:inline">{currentMode.name}</span>
+
+        {/* 成员头像 */}
+        <div className="flex items-center -space-x-2 ml-2">
+          {roundtableMembers.map(member => (
+            <div
+              key={member.id}
+              className={cn(
+                "relative h-7 w-7 rounded-full border-2 border-background transition-all",
+                streamingPersonalityId === member.id && "ring-2 ring-offset-1 ring-offset-background z-10"
+              )}
+              style={{ borderColor: streamingPersonalityId === member.id ? member.color : undefined }}
+              title={member.name}
+            >
+              <Image src={member.avatar} alt={member.name} width={28} height={28} className="rounded-full object-cover" />
+              {streamingPersonalityId === member.id && (
+                <div className="absolute inset-0 animate-pulse rounded-full bg-white/30" />
+              )}
+            </div>
+          ))}
         </div>
+        <span className="ml-1 text-xs text-muted-foreground hidden sm:inline">
+          {roundtableMembers.length}人圆桌
+        </span>
+
         <Button
           variant="outline"
           size="sm"
@@ -247,7 +249,7 @@ export default function RoundtableView() {
         </Button>
       </header>
 
-      {/* ── Management Panel: Members + Mode ── */}
+      {/* ── 管理面板 ── */}
       <AnimatePresence>
         {showMemberPanel && (
           <motion.div
@@ -257,32 +259,28 @@ export default function RoundtableView() {
             className="overflow-hidden border-b border-border/30 bg-card/30"
           >
             <div className="px-4 py-3 space-y-3">
-              {/* Members */}
               <div>
-                <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">参与者 ({roundtableMembers.length})</p>
+                <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  圆桌成员 ({roundtableMembers.length})
+                </p>
                 <div className="flex flex-wrap gap-2">
-                  {roundtableMembers.map((member) => (
+                  {roundtableMembers.map(member => (
                     <button
                       key={member.id}
-                      onClick={() => isHotSeatMode ? setHotSeatId(member.id) : toggleMember(member.id)}
-                      className={cn(
-                        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all",
-                        isHotSeatMode && member.id === hotSeatId && "ring-2 ring-offset-1 ring-offset-background"
-                      )}
+                      onClick={() => toggleMember(member.id)}
+                      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all"
                       style={{
                         borderColor: member.color,
                         backgroundColor: `${member.color}15`,
                         color: member.color,
-                        ...(isHotSeatMode && member.id === hotSeatId ? { ringColor: member.color } : {}),
                       }}
                     >
                       <Image src={member.avatar} alt={member.name} width={18} height={18} className="h-[18px] w-[18px] rounded-full object-cover" />
                       {member.name}
-                      {isHotSeatMode && member.id === hotSeatId && <span className="text-[10px]">🔥</span>}
-                      {!isHotSeatMode && <X className="ml-0.5 h-3 w-3 opacity-50" />}
+                      <X className="ml-0.5 h-3 w-3 opacity-50" />
                     </button>
                   ))}
-                  {availableToAdd.map((p) => (
+                  {availableToAdd.map(p => (
                     <button
                       key={p.id}
                       onClick={() => toggleMember(p.id)}
@@ -292,55 +290,12 @@ export default function RoundtableView() {
                     </button>
                   ))}
                 </div>
-                {isHotSeatMode && (
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">
-                    🔥 点击选择热座人物（当前：<strong>{hotSeatPerson?.name || "未选"}</strong>）
-                  </p>
-                )}
               </div>
 
-              {/* Mode Selection */}
-              <div>
-                <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">讨论模式</p>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {availableModes.map((mode) => {
-                    const isSelected = discussionMode === mode.id;
-                    return (
-                      <button
-                        key={mode.id}
-                        onClick={() => handleModeSelect(mode.id as DiscussionModeId)}
-                        className={cn(
-                          "flex items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all",
-                          isSelected
-                            ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
-                            : "border-border/50 hover:border-border hover:bg-accent/30",
-                          roundtableMembers.length < mode.minParticipants && "opacity-40 cursor-not-allowed"
-                        )}
-                        disabled={roundtableMembers.length < mode.minParticipants}
-                      >
-                        <span className="mt-0.5 text-base flex-shrink-0">{mode.icon}</span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-semibold">{mode.name}</span>
-                            {isSelected && (
-                              <div className="h-1.5 w-1.5 rounded-full bg-primary flex-shrink-0" />
-                            )}
-                          </div>
-                          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground line-clamp-2">
-                            {mode.description}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Start button */}
               {messages.length === 0 && (
-                <Button onClick={handleStartRoundtable} className="w-full gap-2">
+                <Button onClick={() => setShowMemberPanel(false)} className="w-full gap-2">
                   <ChevronRight className="h-4 w-4" />
-                  确认开始{currentMode.name}
+                  开始讨论
                 </Button>
               )}
             </div>
@@ -348,77 +303,42 @@ export default function RoundtableView() {
         )}
       </AnimatePresence>
 
-      {/* ── Discussion Progress ── */}
-      {isLoading && (
-        <div className="border-b border-border/20 bg-gradient-to-b from-card/20 to-transparent px-4 py-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2 text-xs">
-              {roundLabel && (
-                <span
-                  className="rounded-full px-2 py-0.5 font-medium"
-                  style={{ backgroundColor: `${currentMode.color}15`, color: currentMode.color }}
-                >
-                  {roundLabel}
-                </span>
-              )}
-              <span className="text-muted-foreground">{progressText}</span>
-            </div>
-          </div>
-          <div className="flex items-center justify-center gap-4">
-            {roundtableMembers.map((member) => {
-              const isActive = streamingPersonalityId === member.id;
-              return (
-                <motion.div
-                  key={member.id}
-                  className="relative flex flex-col items-center"
-                  animate={isActive ? { scale: [1, 1.05, 1] } : { scale: 1 }}
-                  transition={isActive ? { repeat: Infinity, duration: 2 } : {}}
-                >
-                  <div
-                    className={cn(
-                      "relative h-11 w-11 overflow-hidden rounded-full border-2 transition-all sm:h-12 sm:w-12",
-                      isActive && "ring-2 ring-offset-2 ring-offset-background",
-                      !isActive && "opacity-50"
-                    )}
-                    style={{ borderColor: member.color }}
-                  >
-                    <Image src={member.avatar} alt={member.name} fill className="object-cover" sizes="48px" />
-                    {isActive && <div className="absolute inset-0 animate-pulse bg-white/20 rounded-full" />}
-                  </div>
-                  <span className="mt-1 text-[10px] font-medium" style={{ color: isActive ? member.color : undefined }}>
-                    {member.name}
-                  </span>
-                </motion.div>
-              );
-            })}
+      {/* ── 正在发言提示 ── */}
+      {isLoading && streamingPerson && (
+        <div className="border-b border-border/20 bg-gradient-to-b from-card/20 to-transparent px-4 py-2">
+          <div className="flex items-center gap-2 text-xs">
+            <Image src={streamingPerson.avatar} alt={streamingPerson.name} width={20} height={20} className="h-5 w-5 rounded-full" />
+            <span className="font-medium" style={{ color: streamingPerson.color }}>
+              {streamingPerson.name}
+            </span>
+            <span className="text-muted-foreground">正在思考...</span>
+            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground ml-auto" />
           </div>
         </div>
       )}
 
-      {/* ── Messages ── */}
+      {/* ── 消息列表 ── */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-8">
         <div className="mx-auto max-w-4xl py-6">
           {messages.length === 0 && !showMemberPanel && (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="mb-4 flex -space-x-3">
-                {roundtableMembers.map((member) => (
+                {roundtableMembers.map(member => (
                   <div key={member.id} className="h-14 w-14 overflow-hidden rounded-full border-2 border-background">
                     <Image src={member.avatar} alt={member.name} width={56} height={56} className="object-cover" />
                   </div>
                 ))}
               </div>
               <div className="mb-2 flex items-center gap-2">
-                <span className="text-2xl">{currentMode.icon}</span>
-                <h2 className="text-lg font-bold">{currentMode.name}</h2>
+                <Users className="h-5 w-5 text-muted-foreground" />
+                <h2 className="text-lg font-bold">思想圆桌</h2>
               </div>
-              <p className="mb-1 max-w-lg text-sm text-muted-foreground">{currentMode.longDescription}</p>
-              {isHotSeatMode && hotSeatPerson && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  🔥 热座人物：<strong style={{ color: hotSeatPerson.color }}>{hotSeatPerson.name}</strong>
-                </p>
-              )}
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {["AI会取代人类吗？", "什么是好的决策？", "如何找到人生方向？", "创业最重要的是什么？"].map((q) => (
+              <p className="mb-4 max-w-md text-sm text-muted-foreground leading-relaxed">
+                每个人都是独立的思想者。抛出一个话题，他们会根据自己的思维框架自由讨论、互相碰撞。
+                你可以随时参与，也可以点名让某人回应。
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {["AI会取代人类吗？", "什么是好的决策？", "如何找到人生方向？", "创业最重要的是什么？"].map(q => (
                   <button
                     key={q}
                     onClick={() => setInput(q)}
@@ -432,58 +352,100 @@ export default function RoundtableView() {
                 onClick={() => setShowMemberPanel(true)}
                 className="mt-6 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
               >
-                管理参与者和讨论模式 →
+                管理圆桌成员 →
               </button>
             </div>
           )}
 
-          {messages.map((msg) => (
-            <ChatMessage
-              key={msg.id}
-              message={msg}
-              avatar={
-                msg.role === "assistant" && msg.personalityId
-                  ? roundtableMembers.find((m) => m.id === msg.personalityId)?.avatar
-                  : undefined
-              }
-              personalityName={msg.personalityName}
-              personalityColor={msg.personalityColor}
-            />
-          ))}
+          {messages.map(msg => {
+            const isUser = msg.role === "user";
+            const member = !isUser && msg.personalityId
+              ? roundtableMembers.find(m => m.id === msg.personalityId)
+              : null;
 
-          {isLoading && messages[messages.length - 1]?.content === "" && (
-            <div className="flex gap-3 py-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>正在启动讨论...</span>
+            return (
+              <div key={msg.id} className="group relative mb-4">
+                <ChatMessage
+                  message={msg}
+                  avatar={member?.avatar}
+                  personalityName={msg.personalityName}
+                  personalityColor={msg.personalityColor}
+                />
+
+                {/* 悬停时显示"让TA再说"按钮 */}
+                {!isUser && msg.personalityId && msg.content && !isLoading && (
+                  <div className="absolute -right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 rounded-full border border-border/50 bg-background shadow-sm"
+                      onClick={() => handleReplyTo(msg.personalityId!, msg.content)}
+                      title={`让${msg.personalityName}再说`}
+                    >
+                      <Reply className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })}
 
           <div ref={messagesEndRef} />
         </div>
       </div>
 
-      {/* ── Input ── */}
+      {/* ── 输入区 ── */}
       <div className="border-t border-border/50 bg-card/50 px-4 py-3 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-4xl items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="抛出一个话题..."
-            className="min-h-[44px] max-h-[200px] resize-none rounded-xl border-border/50 bg-background text-sm"
-            rows={1}
-            disabled={isLoading}
-          />
-          <Button
-            onClick={sendMessage}
-            disabled={!input.trim() || isLoading}
-            size="icon"
-            className="h-11 w-11 flex-shrink-0 rounded-xl"
-          >
-            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+        <div className="mx-auto max-w-4xl">
+          {/* 快捷：让某人发言 */}
+          {messages.length > 0 && !isLoading && (
+            <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-1">
+              <span className="text-[11px] text-muted-foreground flex-shrink-0 mr-1">点名：</span>
+              {roundtableMembers.map(member => (
+                <button
+                  key={member.id}
+                  onClick={() => handleReplyTo(member.id)}
+                  className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-all hover:scale-105 flex-shrink-0"
+                  style={{
+                    borderColor: `${member.color}40`,
+                    backgroundColor: `${member.color}10`,
+                    color: member.color,
+                  }}
+                >
+                  <Image src={member.avatar} alt={member.name} width={14} height={14} className="h-3.5 w-3.5 rounded-full" />
+                  {member.name}
+                </button>
+              ))}
+              <button
+                onClick={speakNext}
+                className="flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                title="下一位"
+              >
+                <MessageSquare className="h-3 w-3" />
+                下一位
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-end gap-2">
+            <Textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="抛出一个话题，或回应讨论..."
+              className="min-h-[44px] max-h-[200px] resize-none rounded-xl border-border/50 bg-background text-sm"
+              rows={1}
+              disabled={isLoading}
+            />
+            <Button
+              onClick={sendMessage}
+              disabled={!input.trim() || isLoading}
+              size="icon"
+              className="h-11 w-11 flex-shrink-0 rounded-xl"
+            >
+              {isLoading ? <CircleStop className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
