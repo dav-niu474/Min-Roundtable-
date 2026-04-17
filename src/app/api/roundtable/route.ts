@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getPersonalitiesByIds } from "@/lib/personalities";
-import { createStream, createCompletion, DEFAULT_MODEL } from "@/lib/nvidia";
+import { createCompletion, DEFAULT_MODEL } from "@/lib/nvidia";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,7 @@ interface RoundtableRequest {
   history: RoundtableMessage[];
   model?: string;
   mode?: string;
-  hotSeatId?: string; // for hotseat mode
+  hotSeatId?: string;
 }
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -41,7 +41,7 @@ function getOtherNames(personalities: { id: string; name: string }[], excludeId?
 
 async function* runChainMode(
   personalities: Awaited<ReturnType<typeof getPersonalitiesByIds>>,
-  userMessage: string,
+  topic: string,
   history: RoundtableMessage[],
   modelKey: string,
 ) {
@@ -51,37 +51,31 @@ async function* runChainMode(
     const p = personalities[i];
     const isFirst = i === 0;
 
-    let contextBlock = "";
-    if (!isFirst) {
-      const transcript = speakerResponses.map((s) => `【${s.name}】${s.content}`).join("\n\n");
-      contextBlock = `
-## 💬 圆桌讨论实录（请先阅读）
+    // 场景设定，而非指令
+    const scenario = isFirst
+      ? `你们几个人围坐在一张桌前，桌上没有议程、没有主持人。
+桌上贴着一张纸条，写着：${topic}
 
-${transcript}
+你是第一个开口的。话一旦出口，其他人都会听到并接上。
+就按你最自然的反应说——你会怎么起这个话头？`
+      : `现在桌上贴着一张纸条：${topic}
 
-### 你的任务
-你听到了上面所有人的发言。现在请：
-1. **回应**你最想互动的一到两个观点（赞同、反驳或补充都可以）
-2. **展开**你自己的独特见解——用你的核心思维框架分析这个问题
-3. 可以犀利、可以反对——思想碰撞需要真实观点，不要和稀泥
-4. 保持 200-300 字`;
-    } else {
-      contextBlock = `你是第一个发言的。请率先抛出你最有力的核心观点，为整场讨论定调。不要面面俱到，给出你最独特的一个洞见。200-300字。`;
-    }
+前面这几个人已经聊起来了：
+
+${speakerResponses.map(s => `${s.name}：「${s.content}」`).join("\n\n")}
+
+你一直在听。现在轮到你开口了。
+哪句话让你想接话？哪句话让你想反驳？还是你觉得他们都没说到点子上？
+说你想说的，用你自己的方式。`;
 
     const systemPrompt = `${p.systemPrompt}
 
-## 当前场景
-你正在参加一场链式思想碰撞讨论。参与者：${getOtherNames(personalities, p.id)}。
+${scenario}
 
-## 发言规则
-- 用"我"的身份直接发言，不要"XX认为"
-- 带着你独特的思维框架和视角
-- 可以犀利、有攻击性——真正有价值的讨论需要冲突
-- 不要说废话和客套话
-${contextBlock}`;
+你的表达方式应该是自然的、有个人风格的。不要列举要点、不要总结陈词。
+你就是你，用"我"说话。`;
 
-    const messages = buildMessages(systemPrompt, history, userMessage);
+    const messages = buildMessages(systemPrompt, history, isFirst ? topic : "");
 
     yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: i, totalTurns: personalities.length };
 
@@ -100,190 +94,218 @@ ${contextBlock}`;
 
 async function* runDebateMode(
   personalities: Awaited<ReturnType<typeof getPersonalitiesByIds>>,
-  userMessage: string,
+  topic: string,
   history: RoundtableMessage[],
   modelKey: string,
 ) {
-  // Split into two teams
   const mid = Math.ceil(personalities.length / 2);
   const proTeam = personalities.slice(0, mid);
   const conTeam = personalities.slice(mid);
-  const proNames = proTeam.map((p) => p.name).join("、");
-  const conNames = conTeam.map((p) => p.name).join("、");
+  const proNames = proTeam.map(p => p.name).join("、");
+  const conNames = conTeam.map(p => p.name).join("、");
 
-  const rounds = [
-    { name: "立论", desc: "陈述你的核心论点" },
-    { name: "驳论", desc: "反驳对方的论点，加固己方立场" },
-    { name: "结辩", desc: "总结陈词，给出最终立场" },
-  ];
+  const allContext: Array<{ name: string; team: "pro" | "con"; content: string }> = [];
 
-  const allTeamContext: Array<{ name: string; team: "pro" | "con"; content: string }> = [];
+  // Round 1: Opening statements
+  yield { type: "round_start" as const, round: 0, roundName: "立论", roundDesc: "双方各自亮出核心立场" };
 
-  for (let round = 0; round < rounds.length; round++) {
-    yield { type: "round_start" as const, round, roundName: rounds[round].name, roundDesc: rounds[round].desc };
+  for (const p of proTeam) {
+    const systemPrompt = `${p.systemPrompt}
 
-    // Pro team speaks
-    for (const p of proTeam) {
-      const teamTranscript = allTeamContext
-        .filter((c) => c.team === "pro")
-        .map((c) => `【${c.name}】${c.content}`)
-        .join("\n\n");
-      const oppTranscript = allTeamContext
-        .filter((c) => c.team === "con")
-        .map((c) => `【${c.name}】${c.content}`)
-        .join("\n\n");
+一场辩论开始了。辩题：${topic}
 
-      const systemPrompt = `${p.systemPrompt}
-
-## 辩论场景
-议题：${userMessage}
-
-你的立场：**正方**（支持/赞成）
 你的队友：${proNames}
-反方：${conNames}
-当前轮次：${rounds[round].name} — ${rounds[round].desc}
+对面：${conNames}
 
-${teamTranscript ? `## 己方发言记录\n${teamTranscript}\n` : ""}
-${oppTranscript ? `## 反方发言记录\n${oppTranscript}\n` : ""}
-## 规则
-- 你是正方，立场鲜明
-- 用你的思维框架构建论据
-- ${round === 1 ? "重点反驳反方的论点" : round === 2 ? "总结全文，给出最强有力的结尾" : "抛出你的核心论点"}
-- 保持 150-250 字`;
+你站在正方这边——你天然倾向于支持这个命题。但这不是角色扮演，如果你内心其实并不认同，你可以诚实地表达你的保留。
+先说你的核心论点。就像真实辩论中一样——你有自己的想法，按你的方式表达。`;
 
-      yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allTeamContext.length, totalTurns: personalities.length * 3, meta: { team: "pro", round: rounds[round].name } };
-
-      const fullText = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
-      yield { type: "stream_text" as const, personalityId: p.id, text: fullText };
-      yield { type: "turn_end" as const, personalityId: p.id };
-      allTeamContext.push({ name: p.name, team: "pro", content: fullText });
-    }
-
-    // Con team speaks
-    for (const p of conTeam) {
-      const teamTranscript = allTeamContext
-        .filter((c) => c.team === "con")
-        .map((c) => `【${c.name}】${c.content}`)
-        .join("\n\n");
-      const oppTranscript = allTeamContext
-        .filter((c) => c.team === "pro")
-        .map((c) => `【${c.name}】${c.content}`)
-        .join("\n\n");
-
-      const systemPrompt = `${p.systemPrompt}
-
-## 辩论场景
-议题：${userMessage}
-
-你的立场：**反方**（反对/质疑）
-你的队友：${conNames}
-正方：${proNames}
-当前轮次：${rounds[round].name} — ${rounds[round].desc}
-
-${teamTranscript ? `## 己方发言记录\n${teamTranscript}\n` : ""}
-${oppTranscript ? `## 正方发言记录\n${oppTranscript}\n` : ""}
-## 规则
-- 你是反方，立场鲜明
-- 用你的思维框架构建论据
-- ${round === 1 ? "重点反驳正方的论点" : round === 2 ? "总结全文，给出最强有力的结尾" : "抛出你的核心论点"}
-- 保持 150-250 字`;
-
-      yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allTeamContext.length, totalTurns: personalities.length * 3, meta: { team: "con", round: rounds[round].name } };
-
-      const fullText = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
-      yield { type: "stream_text" as const, personalityId: p.id, text: fullText };
-      yield { type: "turn_end" as const, personalityId: p.id };
-      allTeamContext.push({ name: p.name, team: "con", content: fullText });
-    }
-
-    yield { type: "round_end" as const, round, roundName: rounds[round].name };
+    yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allContext.length, totalTurns: personalities.length * 3, meta: { team: "pro", round: "立论" } };
+    const text = await safeComplete(buildMessages(systemPrompt, history, topic), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
+    yield { type: "turn_end" as const, personalityId: p.id };
+    allContext.push({ name: p.name, team: "pro", content: text });
   }
+
+  for (const p of conTeam) {
+    const proStatements = allContext.filter(c => c.team === "pro").map(c => `${c.name}：「${c.content}」`).join("\n\n");
+
+    const systemPrompt = `${p.systemPrompt}
+
+一场辩论开始了。辩题：${topic}
+
+你的队友：${conNames}
+对面：${proNames}
+
+你站在反方这边——你天然倾向于质疑这个命题。但这不是角色扮演，如果你内心其实认同正方的某些观点，你可以坦诚地说出来。
+对面已经说了：
+
+${proStatements}
+
+你听到了他们的论点。现在轮到你。你想怎么反驳？还是你想先承认某些合理的地方？`;
+
+    yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allContext.length, totalTurns: personalities.length * 3, meta: { team: "con", round: "立论" } };
+    const text = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
+    yield { type: "turn_end" as const, personalityId: p.id };
+    allContext.push({ name: p.name, team: "con", content: text });
+  }
+
+  yield { type: "round_end" as const, round: 0, roundName: "立论" };
+
+  // Round 2: Rebuttals
+  yield { type: "round_start" as const, round: 1, roundName: "驳论", roundDesc: "互相反驳对方论点" };
+
+  for (const p of proTeam) {
+    const oppStatements = allContext.filter(c => c.team === "con").map(c => `${c.name}：「${c.content}」`).join("\n\n");
+    const teamStatements = allContext.filter(c => c.team === "pro" && c.name !== p.name).map(c => `${c.name}：「${c.content}」`).join("\n\n");
+
+    const systemPrompt = `${p.systemPrompt}
+
+辩论继续。辩题：${topic}
+
+反方刚才的反驳：
+
+${oppStatements}
+${teamStatements ? `\n你队友说过：\n${teamStatements}\n` : ""}
+
+你听到了对面怎么反驳你们。他们哪里说得有道理？哪里完全没抓住重点？你想怎么回应？`;
+
+    yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allContext.length, totalTurns: personalities.length * 3, meta: { team: "pro", round: "驳论" } };
+    const text = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
+    yield { type: "turn_end" as const, personalityId: p.id };
+    allContext.push({ name: p.name, team: "pro", content: text });
+  }
+
+  for (const p of conTeam) {
+    const oppStatements = allContext.filter(c => c.team === "pro").map(c => `${c.name}：「${c.content}」`).join("\n\n");
+    const teamStatements = allContext.filter(c => c.team === "con" && c.name !== p.name).map(c => `${c.name}：「${c.content}」`).join("\n\n");
+
+    const systemPrompt = `${p.systemPrompt}
+
+辩论继续。辩题：${topic}
+
+正方刚才的反驳：
+
+${oppStatements}
+${teamStatements ? `\n你队友说过：\n${teamStatements}\n` : ""}
+
+对面反驳了你们。你怎么看他们的回应？哪里站得住脚？哪里是胡扯？`;
+
+    yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allContext.length, totalTurns: personalities.length * 3, meta: { team: "con", round: "驳论" } };
+    const text = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
+    yield { type: "turn_end" as const, personalityId: p.id };
+    allContext.push({ name: p.name, team: "con", content: text });
+  }
+
+  yield { type: "round_end" as const, round: 1, roundName: "驳论" };
+
+  // Round 3: Closing
+  yield { type: "round_start" as const, round: 2, roundName: "结辩", roundDesc: "最终立场" };
+
+  for (const p of [...proTeam, ...conTeam]) {
+    const team = proTeam.includes(p) ? "pro" : "con";
+    const fullTranscript = allContext.map(c => `${c.name}（${c.team === "pro" ? "正方" : "反方"}）：「${c.content}」`).join("\n\n");
+
+    const systemPrompt = `${p.systemPrompt}
+
+辩论到了最后。辩题：${topic}
+
+整场辩论的完整记录：
+
+${fullTranscript}
+
+你是${team === "pro" ? "正方" : "反方"}。
+
+最后这个机会，你想说什么？也许你被对面说服了某些点，也许你找到了新的角度。
+不说套话，说你自己真实的最后想法。`;
+
+    yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: allContext.length, totalTurns: personalities.length * 3, meta: { team, round: "结辩" } };
+    const text = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
+    yield { type: "turn_end" as const, personalityId: p.id };
+    allContext.push({ name: p.name, team, content: text });
+  }
+
+  yield { type: "round_end" as const, round: 2, roundName: "结辩" };
 }
 
 // ─── Mode: Hot Seat (热座挑战) ────────────────────────────
 
 async function* runHotSeatMode(
   personalities: Awaited<ReturnType<typeof getPersonalitiesByIds>>,
-  userMessage: string,
+  topic: string,
   history: RoundtableMessage[],
   modelKey: string,
   hotSeatId: string,
 ) {
-  const hotSeat = personalities.find((p) => p.id === hotSeatId) || personalities[0];
-  const challengers = personalities.filter((p) => p.id !== hotSeatId);
-  const challengerNames = challengers.map((c) => c.name).join("、");
+  const hotSeat = personalities.find(p => p.id === hotSeatId) || personalities[0];
+  const challengers = personalities.filter(p => p.id !== hotSeatId);
 
-  // Phase 1: Hot seat opening statement
-  yield { type: "phase_start" as const, phase: "opening", phaseName: "热座陈述", description: `${hotSeat.name} 先阐述核心观点` };
+  // Phase 1: Hot seat speaks first
+  yield { type: "phase_start" as const, phase: "opening", phaseName: "热座陈述", description: `${hotSeat.name} 先聊聊他的看法` };
 
-  const hotSeatSystemPrompt = `${hotSeat.systemPrompt}
+  const openPrompt = `${hotSeat.systemPrompt}
 
-## 场景
-你坐在「热座」上，话题是：${userMessage}
-接下来会有 ${challengerNames} 依次对你发起挑战。
+你坐在一把椅子上，话题贴在墙上：${topic}
 
-## 你的任务
-先用 200-300 字阐述你关于这个话题的核心观点和立场。要鲜明、有力量，让挑战者有明确的目标可以攻击。`;
+${challengers.map(c => c.name).join("、")} 几个人站在你面前，准备随时向你发难。
+但先别管他们。就这个话题，你先说说你真实的想法。你最想表达的论点是什么？
+你很清楚他们可能从各种角度来挑战你，所以把你想说的先说清楚。`;
 
   yield { type: "turn_start" as const, personalityId: hotSeat.id, personalityName: hotSeat.name, turnIndex: 0, totalTurns: challengers.length + 2, meta: { phase: "opening" } };
-
-  const openingText = await safeComplete(buildMessages(hotSeatSystemPrompt, history, userMessage), modelKey, hotSeat.name);
+  const openingText = await safeComplete(buildMessages(openPrompt, history, topic), modelKey, hotSeat.name);
   yield { type: "stream_text" as const, personalityId: hotSeat.id, text: openingText };
   yield { type: "turn_end" as const, personalityId: hotSeat.id };
 
   // Phase 2: Challenges
-  yield { type: "phase_start" as const, phase: "challenge", phaseName: "轮番挑战", description: "每位挑战者质疑热座人物的观点" };
+  yield { type: "phase_start" as const, phase: "challenge", phaseName: "轮番挑战", description: "每个人向热座人物发问" };
 
   const challenges: Array<{ name: string; content: string }> = [];
 
   for (let i = 0; i < challengers.length; i++) {
     const challenger = challengers[i];
-    const prevChallenges = challenges.map((c) => `【${c.name}】${c.content}`).join("\n\n");
+    const prevChallenges = challenges.map(c => `${c.name}：「${c.content}」`).join("\n\n");
 
-    const systemPrompt = `${challenger.systemPrompt}
+    const challengePrompt = `${challenger.systemPrompt}
 
-## 场景
-${hotSeat.name} 坐在热座上，刚才说了：
-"${openingText}"
+${hotSeat.name} 刚才说了这些：
 
-话题：${userMessage}
+「${openingText}」
 
-${prevChallenges ? `## 其他挑战者已经说了\n${prevChallenges}\n\n` : ""}
-## 你的任务
-用你最犀利的思维框架，质疑 ${hotSeat.name} 的观点中的薄弱环节。200-250字。`;
+话题：${topic}
+${prevChallenges ? `\n你前面的这些人已经发起了挑战：\n${prevChallenges}\n` : ""}
+你一直在听。${hotSeat.name}说的这些话，你觉得哪里站不住脚？哪里值得追问？
+用你最擅长的方式去挑战。不是为了赢，是为了把这个话题挖得更深。`;
 
     yield { type: "turn_start" as const, personalityId: challenger.id, personalityName: challenger.name, turnIndex: i + 1, totalTurns: challengers.length + 2, meta: { phase: "challenge" } };
-
-    const challengeText = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, challenger.name);
+    const challengeText = await safeComplete(buildMessages(challengePrompt, history, ""), modelKey, challenger.name);
     yield { type: "stream_text" as const, personalityId: challenger.id, text: challengeText };
     yield { type: "turn_end" as const, personalityId: challenger.id };
     challenges.push({ name: challenger.name, content: challengeText });
   }
 
-  // Phase 3: Hot seat response
-  yield { type: "phase_start" as const, phase: "response", phaseName: "热座回应", description: `${hotSeat.name} 回应所有挑战` };
+  // Phase 3: Hot seat responds
+  yield { type: "phase_start" as const, phase: "response", phaseName: "热座回应", description: `${hotSeat.name} 最后的回应` };
 
-  const allChallenges = challenges.map((c) => `【${c.name}】${c.content}`).join("\n\n");
+  const allChallenges = challenges.map(c => `${c.name}：「${c.content}」`).join("\n\n");
 
   const responsePrompt = `${hotSeat.systemPrompt}
 
-## 场景
-你坐在热座上。之前你说了：
-"${openingText}"
+你之前说过：
 
-然后 ${challengerNames} 对你发起了以下挑战：
+「${openingText}」
+
+然后这几个人向你发起了挑战：
 
 ${allChallenges}
 
-## 你的任务
-回应这些挑战。你可以：
-- 承认有道理的部分，修正你的观点
-- 反驳错误的质疑
-- 深化你原来的论点
-不要和稀泥，该坚持就坚持，该认错就认错。200-300字。`;
+你现在听到了所有质疑。哪些挑战让你重新思考了？哪些你觉得完全误解了你的意思？
+如果你愿意修正自己的观点，就修正。如果你想反驳，就反驳。说真实想法。`;
 
   yield { type: "turn_start" as const, personalityId: hotSeat.id, personalityName: hotSeat.name, turnIndex: challengers.length + 1, totalTurns: challengers.length + 2, meta: { phase: "response" } };
-
   const responseText = await safeComplete(buildMessages(responsePrompt, history, ""), modelKey, hotSeat.name);
   yield { type: "stream_text" as const, personalityId: hotSeat.id, text: responseText };
   yield { type: "turn_end" as const, personalityId: hotSeat.id };
@@ -294,71 +316,62 @@ ${allChallenges}
 
 async function* runConsultMode(
   personalities: Awaited<ReturnType<typeof getPersonalitiesByIds>>,
-  userMessage: string,
+  topic: string,
   history: RoundtableMessage[],
   modelKey: string,
 ) {
-  const mentorNames = personalities.map((p) => p.name).join("、");
+  const allNames = personalities.map(p => p.name).join("、");
 
-  // Phase 1: Independent diagnosis
-  yield { type: "phase_start" as const, phase: "diagnosis", phaseName: "独立诊断", description: "每位导师给出诊断和建议" };
+  // Phase 1: Each mentor independently thinks about the problem
+  yield { type: "phase_start" as const, phase: "diagnosis", phaseName: "独立思考", description: "每位导师各自消化这个问题" };
 
   const diagnoses: Array<{ name: string; content: string }> = [];
 
   for (let i = 0; i < personalities.length; i++) {
     const p = personalities[i];
 
-    const systemPrompt = `${p.systemPrompt}
+    const prompt = `${p.systemPrompt}
 
-## 场景
-有人向你求助：
-"${userMessage}"
+有人带来一个问题：
 
-其他也会给出建议的导师：${mentorNames}
+「${topic}」
 
-## 你的任务
-用你的思维框架独立诊断这个问题。给出：
-1. 你认为问题的本质是什么？
-2. 你的核心建议是什么？
-3. 大多数人会忽略的关键点是什么？
-200-250 字。独立思考，不要参考其他导师的意见（他们还没发言）。`;
+${allNames} 都在，每个人会从自己的角度来想这件事。
+但此时此刻，其他人还没说话。你只有你自己。
+按你自己的方式来思考这个问题——你最自然的第一反应是什么？`;
 
     yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: i, totalTurns: personalities.length * 2 };
-
-    const diagText = await safeComplete(buildMessages(systemPrompt, history, userMessage), modelKey, p.name);
-    yield { type: "stream_text" as const, personalityId: p.id, text: diagText };
+    const text = await safeComplete(buildMessages(prompt, history, topic), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
     yield { type: "turn_end" as const, personalityId: p.id };
-    diagnoses.push({ name: p.name, content: diagText });
+    diagnoses.push({ name: p.name, content: text });
   }
 
-  // Phase 2: Cross-review
-  yield { type: "phase_start" as const, phase: "review", phaseName: "交叉点评", description: "导师们互相评价对方方案" };
+  // Phase 2: Cross-review — now everyone sees what others said
+  yield { type: "phase_start" as const, phase: "review", phaseName: "互相碰撞", description: "看完大家的想法后再说" };
 
-  const allDiagnoses = diagnoses.map((d) => `【${d.name}】${d.content}`).join("\n\n");
+  const allDiagnoses = diagnoses.map(d => `${d.name}：「${d.content}」`).join("\n\n");
 
   for (let i = 0; i < personalities.length; i++) {
     const p = personalities[i];
 
-    const systemPrompt = `${p.systemPrompt}
+    const prompt = `${p.systemPrompt}
 
-## 场景
-原始问题：${userMessage}
+还是那个问题：
 
-以下是所有导师的独立诊断：
+「${topic}」
+
+刚才每个人都独立说了一遍自己的看法。完整记录：
 
 ${allDiagnoses}
 
-## 你的任务
-你现在看到了所有人的诊断。请：
-1. 你最赞同谁的观点？为什么？
-2. 你最反对谁的观点？盲区在哪里？
-3. 综合来看，你认为最优解是什么？
-150-200 字。`;
+你自己的看法也在里面。现在你看完了所有人的想法。
+也许有人说了让你眼前一亮的话，也许有人说的你觉得完全扯淡。
+你想补充什么？修正什么？还是你觉得该反驳谁？`;
 
     yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: personalities.length + i, totalTurns: personalities.length * 2, meta: { phase: "review" } };
-
-    const reviewText = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
-    yield { type: "stream_text" as const, personalityId: p.id, text: reviewText };
+    const text = await safeComplete(buildMessages(prompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
     yield { type: "turn_end" as const, personalityId: p.id };
   }
 
@@ -369,63 +382,56 @@ ${allDiagnoses}
 
 async function* runReverseMode(
   personalities: Awaited<ReturnType<typeof getPersonalitiesByIds>>,
-  userMessage: string,
+  topic: string,
   history: RoundtableMessage[],
   modelKey: string,
 ) {
-  // Phase 1: List failure paths
-  yield { type: "phase_start" as const, phase: "failures", phaseName: "集思广「败」", description: "列出所有失败路径" };
+  // Phase 1: Everyone lists failure paths
+  yield { type: "phase_start" as const, phase: "failures", phaseName: "集思广「败」", description: "不谈怎么成功，只谈怎么搞砸" };
 
   const failures: Array<{ name: string; content: string }> = [];
 
   for (let i = 0; i < personalities.length; i++) {
     const p = personalities[i];
 
-    const systemPrompt = `${p.systemPrompt}
+    const prompt = `${p.systemPrompt}
 
-## 场景
-话题：${userMessage}
+话题：${topic}
 
-## 逆向头脑风暴
-不问"怎么做好"，而是问"怎么确保彻底失败"。
-用你的思维框架，列出尽可能多的失败路径和致命错误。
-要有创意，要出人意料。150-200 字。`;
+但今天的问题不是"怎么做好"。
+问题是：如果一个人铁了心要在这件事上彻底搞砸，他会怎么做？
+用你最毒的眼光，从你的经验出发，列出你能想到的最致命的错误和陷阱。`;
 
     yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: i, totalTurns: personalities.length + 1 };
-
-    const failText = await safeComplete(buildMessages(systemPrompt, history, userMessage), modelKey, p.name);
-    yield { type: "stream_text" as const, personalityId: p.id, text: failText };
+    const text = await safeComplete(buildMessages(prompt, history, topic), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
     yield { type: "turn_end" as const, personalityId: p.id };
-    failures.push({ name: p.name, content: failText });
+    failures.push({ name: p.name, content: text });
   }
 
-  // Phase 2: Inversion — what to avoid
-  yield { type: "phase_start" as const, phase: "inversion", phaseName: "反转行动", description: "从失败路径反推出避坑指南" };
+  // Phase 2: Inversion
+  yield { type: "phase_start" as const, phase: "inversion", phaseName: "反转思考", description: "从失败路径反推出该做什么" };
 
-  const allFailures = failures.map((f) => `【${f.name}】${f.content}`).join("\n\n");
+  const allFailures = failures.map(f => `${f.name}：「${f.content}」`).join("\n\n");
 
   for (let i = 0; i < personalities.length; i++) {
     const p = personalities[i];
 
-    const systemPrompt = `${p.systemPrompt}
+    const prompt = `${p.systemPrompt}
 
-## 场景
-话题：${userMessage}
+话题：${topic}
 
-## 所有人列出的失败路径：
+刚才你们一起把这件事能搞砸的所有方式都想了一遍：
+
 ${allFailures}
 
-## 反转
-看到了所有失败路径。现在请从你的思维框架出发：
-1. 这些失败路径中，哪个最致命、最容易被忽视？
-2. 如果只能做三件事来避免失败，你会选哪三件？
-3. 用一句话总结你的「反失败」原则。
-150-200 字。`;
+现在反过来——看到了这么多坑。
+从你的角度，哪个坑最容易被忽视但最致命？
+如果只能记住一件事来避免这些失败，那件事是什么？`;
 
     yield { type: "turn_start" as const, personalityId: p.id, personalityName: p.name, turnIndex: personalities.length + i, totalTurns: personalities.length + 1, meta: { phase: "inversion" } };
-
-    const invText = await safeComplete(buildMessages(systemPrompt, history, ""), modelKey, p.name);
-    yield { type: "stream_text" as const, personalityId: p.id, text: invText };
+    const text = await safeComplete(buildMessages(prompt, history, ""), modelKey, p.name);
+    yield { type: "stream_text" as const, personalityId: p.id, text };
     yield { type: "turn_end" as const, personalityId: p.id };
   }
 
@@ -460,7 +466,7 @@ async function safeComplete(
   try {
     return await getFullResponse(messages, modelKey);
   } catch {
-    return `⚠️ ${speakerName}发言失败，请重试。`;
+    return `⚠️ ${speakerName} 发言失败，请重试。`;
   }
 }
 
@@ -509,7 +515,6 @@ export async function POST(req: NextRequest) {
     const selectedModel = model || DEFAULT_MODEL;
     const encoder = new TextEncoder();
 
-    // Select mode runner
     let modeRunner: AsyncGenerator<ChainEvent>;
 
     switch (mode) {
@@ -535,7 +540,6 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         try {
           for await (const event of modeRunner) {
-            // Send stream_text as individual chunks for typing effect
             if (event.type === "stream_text") {
               const text = event.text;
               const chunkSize = Math.max(2, Math.floor(text.length / 50));
@@ -549,7 +553,6 @@ export async function POST(req: NextRequest) {
                 await new Promise((r) => setTimeout(r, 12));
               }
             } else {
-              // Send meta events as-is
               controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
             }
           }
