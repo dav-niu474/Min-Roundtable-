@@ -252,3 +252,36 @@ Stage Summary:
 - 6 Groq models + 6 NVIDIA models = 12 total model options
 - Model selector shows provider availability status with visual indicators
 - Build verified: all 10 routes compile successfully
+
+---
+Task ID: 6
+Agent: Main Agent
+Task: Redesign roundtable from parallel Q&A to chain discussion with genuine intellectual collision
+
+Work Log:
+- **Core problem identified**: Previous roundtable was "各说各话" (everyone talks independently) — each personality answered the user's question in isolation, no interaction
+- **Roundtable API complete rewrite** (`/api/roundtable/route.ts`):
+  - Changed from parallel independent responses to sequential chain discussion
+  - Each subsequent speaker receives ALL previous speakers' full responses as context
+  - First speaker is instructed to set the tone with their strongest insight
+  - Later speakers explicitly told to: respond to specific points, agree/disagree, add unique perspective, challenge assumptions
+  - Added turn_start/turn_end signals for frontend to track discussion progress
+  - Strategy: use non-streaming call to collect full response for context, then "fake stream" to client for natural feel
+  - Fallback chain: streaming → non-streaming → error message
+- **Roundtable UI redesign** (`roundtable-view.tsx`):
+  - Added discussion progress bar showing current speaker / total speakers
+  - Active speaker has pulsing animation + ring highlight
+  - Completed speakers show green dot, pending speakers show gray dot
+  - Thinking → Speaking → Transitioning phase indicators
+  - Added suggested topic chips: "AI会取代人类吗？", "什么是好的决策？", "如何找到人生方向？"
+  - Updated empty state text to explain chain discussion concept
+- **1-on-1 chat enhanced** (`/api/chat/route.ts` + `chat-view.tsx`):
+  - Added "对话模式" instruction: question assumptions, push back with counter-questions, avoid generic AI-style answers
+  - Updated placeholder: "和XX深度对话..." instead of "向XX提问..."
+  - Updated empty state to emphasize "思维碰撞" not Q&A
+
+Stage Summary:
+- Roundtable now creates genuine intellectual collision — each speaker sees and responds to all previous speakers
+- Chain format: Speaker A → Speaker B (sees A's response) → Speaker C (sees A & B's responses) → ...
+- 1-on-1 chat is now a dialogue with pushback, not passive Q&A
+- Build verified: all routes compile successfully

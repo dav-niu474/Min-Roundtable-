@@ -42,8 +42,19 @@ export async function POST(req: NextRequest) {
 
     const trimmedHistory = history.slice(-MAX_HISTORY_MESSAGES);
 
+    // Enhanced system prompt for deep dialogue, not Q&A
+    const dialogueInstruction = `
+
+## 对话模式
+这不是一问一答。你在和一个人进行深度对话。
+- 如果对方的问题有前提假设，先质疑这个假设
+- 回答后，提出你的反问或追问——推动对话深入
+- 不要面面俱到地列举要点，选择最值得深入的一个点展开
+- 像真正的对话一样：有来有往，有碰撞，有追问
+- 保持你的个性，不要变成通用的AI助手`;
+
     const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-      { role: "system", content: personality.systemPrompt },
+      { role: "system", content: `${personality.systemPrompt}${dialogueInstruction}` },
       ...trimmedHistory.map((msg) => ({
         role: msg.role as "user" | "assistant",
         content: msg.content,

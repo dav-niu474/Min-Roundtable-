@@ -248,7 +248,7 @@ export default function ChatView() {
                     {activePersonality.title}
                   </p>
                   <p className="max-w-md text-sm text-muted-foreground/70">
-                    我以{activePersonality.name}的视角和你聊，基于公开言论提炼的思维框架，非本人观点。
+                    我以{activePersonality.name}的视角和你深度对话。我会质疑你的假设、追问你的逻辑——这不是一问一答，而是一场思维碰撞。
                   </p>
                 </div>
               )}
@@ -284,7 +284,7 @@ export default function ChatView() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={`向${activePersonality.name}提问...`}
+                placeholder={`和${activePersonality.name}深度对话...`}
                 className="min-h-[44px] max-h-[200px] resize-none rounded-xl border-border/50 bg-background text-sm"
                 rows={1}
                 disabled={isLoading}
